@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voltify Electronics</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="page-shell">
+
+    <!-- ════════════════════════════════════ HEADER ════ -->
+    <header class="site-header">
+      <div class="header-top">
+        <a class="brand" href="#top">
+          <span class="brand-mark">V</span>
+          <strong>Voltify</strong>
+        </a>
+        <form class="header-search" onsubmit="return false">
+          <input id="searchInput" type="search" placeholder="Search mobiles, laptops, accessories and more...">
+          <button type="submit" class="search-btn" aria-label="Search">&#128269;</button>
+        </form>
+        <div class="header-actions">
+          <button id="authButton" class="header-action-btn" type="button">&#128100; Login</button>
+          <button id="cartButton" class="header-cart-btn" type="button">
+            &#128722; Cart <span id="cartCount" class="cart-badge">0</span>
+          </button>
+        </div>
+      </div>
+      <div class="header-nav">
+        <div class="nav-inner">
+          <nav class="main-nav">
+            <a href="#top">Home</a>
+            <a href="#catalog">Shop All</a>
+            <a href="#catalog" onclick="filterCategory('Mobile');return false;">Mobiles</a>
+            <a href="#catalog" onclick="filterCategory('Laptop');return false;">Laptops</a>
+            <a href="#catalog" onclick="filterCategory('Accessories');return false;">Accessories</a>
+            <a href="#journey">How It Works</a>
+            <a href="#orders">Track Orders</a>
+            <a href="#admin">Admin</a>
+          </nav>
+        </div>
+      </div>
+    </header>
+
+    <main id="top">
+
+      <!-- ════════════════════════════════════ HERO BANNER ════ -->
+      <section class="hero-banner">
+        <div class="hero-inner">
+          <div class="hero-body">
+            <span class="hero-badge">New Arrivals 2026</span>
+            <h1>Shop the Latest<br><span class="hero-hl">Electronics</span></h1>
+            <p class="hero-sub">Mobiles, laptops and accessories with real-time stock, transparent pricing and seamless order tracking — direct to your door.</p>
+            <div class="hero-ctas">
+              <a class="btn-hero-primary" href="#catalog">Shop Now</a>
+              <button id="demoLoginButton" class="btn-hero-outline" type="button">Use Demo Accounts</button>
+            </div>
+          </div>
+          <div class="hero-showcase">
+            <div class="showcase-item showcase-main">
+              <img src="https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=600&q=80" alt="Latest Smartphones">
+              <div class="showcase-label">&#128241; Mobiles</div>
+            </div>
+            <div class="showcase-col">
+              <div class="showcase-item">
+                <img src="https://images.unsplash.com/photo-1496181133206-80ce9b88a853?auto=format&fit=crop&w=600&q=80" alt="Laptops">
+                <div class="showcase-label">&#128187; Laptops</div>
+              </div>
+              <div class="showcase-item">
+                <img src="https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=600&q=80" alt="Accessories">
+                <div class="showcase-label">&#127911; Accessories</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════ OFFERS STRIP ════ -->
+      <div class="offers-strip">
+        <div class="content-wrap">
+          <span class="offers-label">Bank Offers</span>
+          <div class="offers-list">
+            <span class="offer-tag">10% off · HDFC Bank</span>
+            <span class="offer-tag">Extra 5% · ICICI Card</span>
+            <span class="offer-tag">No-cost EMI available</span>
+            <span class="offer-tag">SBI Card cashback</span>
+            <span class="offer-tag">Free delivery &#8377;999+</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ════════════════════════════════════ SERVICE STRIP ════ -->
+      <div class="service-strip">
+        <div class="content-wrap service-inner">
+          <div class="service-item"><span>&#128666;</span><div><strong>Free Delivery</strong><small>Orders &#8377;999+</small></div></div>
+          <div class="service-item"><span>&#128260;</span><div><strong>Easy Returns</strong><small>7-day policy</small></div></div>
+          <div class="service-item"><span>&#9989;</span><div><strong>Genuine Products</strong><small>100% authentic</small></div></div>
+          <div class="service-item"><span>&#128274;</span><div><strong>Secure Payment</strong><small>Encrypted checkout</small></div></div>
+          <div class="service-item"><span>&#9889;</span><div><strong>Fast Dispatch</strong><small>Same day shipping</small></div></div>
+        </div>
+      </div>
+
+      <!-- ════════════════════════════════════ CONTENT ════ -->
+      <div class="content-wrap">
+
+        <!-- CATEGORIES -->
+        <section class="section-wrap">
+          <div class="section-heading">
+            <p class="eyebrow">Browse by type</p>
+            <h2>Shop by Category</h2>
+          </div>
+          <div id="categoryGrid" class="category-grid"></div>
+        </section>
+
+        <!-- CATALOG -->
+        <section id="catalog" class="section-wrap">
+          <div class="section-heading split">
+            <div>
+              <p class="eyebrow">Full product range</p>
+              <h2>Electronics Catalog</h2>
+            </div>
+            <div class="catalog-tools">
+              <select id="categoryFilter">
+                <option value="All">All categories</option>
+              </select>
+            </div>
+          </div>
+          <div id="productGrid" class="product-grid"></div>
+        </section>
+
+        <!-- HOW IT WORKS -->
+        <section id="journey" class="section-wrap">
+          <div class="section-heading">
+            <p class="eyebrow">Shopping experience</p>
+            <h2>How It Works</h2>
+          </div>
+          <div class="journey-steps">
+            <article><strong>1</strong><span>Browse</span></article>
+            <article><strong>2</strong><span>Select</span></article>
+            <article><strong>3</strong><span>Add to Cart</span></article>
+            <article><strong>4</strong><span>Checkout</span></article>
+            <article><strong>5</strong><span>Track Order</span></article>
+            <article><strong>6</strong><span>Receive</span></article>
+          </div>
+        </section>
+
+        <!-- ORDER TRACKING -->
+        <section id="orders" class="section-wrap">
+          <div class="section-heading split">
+            <div>
+              <p class="eyebrow">Order tracking</p>
+              <h2>Track Your Order</h2>
+            </div>
+            <form id="trackOrderForm" class="tracker-form">
+              <input id="trackOrderInput" type="text" placeholder="Enter order ID, e.g. ORD-1001">
+              <button class="primary-button" type="submit">Track</button>
+            </form>
+          </div>
+          <div id="trackingResult" class="tracking-result empty-state">Enter an order reference to view status, items, and totals.</div>
+        </section>
+
+        <!-- ADMIN -->
+        <section id="admin" class="section-wrap">
+          <div class="section-heading split">
+            <div>
+              <p class="eyebrow">Admin dashboard</p>
+              <h2>Manage Products &amp; Orders</h2>
+            </div>
+            <div id="sessionBadge" class="session-badge">Not logged in</div>
+          </div>
+          <div class="admin-layout">
+            <article class="admin-card">
+              <h3>Admin Access</h3>
+              <p>Only the single admin account can manage products and order statuses.</p>
+              <div class="demo-credentials">
+                <span>Admin: admin@voltify.com / Admin@123</span>
+                <span>Customer: user@voltify.com / User@123</span>
+              </div>
+              <button id="logoutButton" class="ghost-button full-width" type="button">Logout</button>
+            </article>
+            <article class="admin-card">
+              <h3>Add or Update Product</h3>
+              <form id="productForm" class="stack-form">
+                <input type="hidden" id="productId">
+                <input id="productName" type="text" placeholder="Product name" required>
+                <input id="productBrand" type="text" placeholder="Brand" required>
+                <select id="productCategory" required>
+                  <option value="">Select category</option>
+                  <option value="Mobile">Mobile</option>
+                  <option value="Laptop">Laptop</option>
+                  <option value="Accessories">Accessories</option>
+                </select>
+                <input id="productPrice" type="number" min="1" step="1" placeholder="Price" required>
+                <input id="productStock" type="number" min="0" step="1" placeholder="Stock quantity" required>
+                <input id="productImage" type="url" placeholder="Image URL" required>
+                <textarea id="productDescription" rows="4" placeholder="Description" required></textarea>
+                <button class="primary-button full-width" type="submit">Save Product</button>
+              </form>
+            </article>
+          </div>
+          <div class="dashboard-panels">
+            <article class="admin-card">
+              <h3>Inventory Control</h3>
+              <div id="inventoryTable" class="table-shell"></div>
+            </article>
+            <article class="admin-card">
+              <h3>Order Management</h3>
+              <div id="ordersTable" class="table-shell"></div>
+            </article>
+          </div>
+        </section>
+
+      </div><!-- /.content-wrap -->
+    </main>
+
+    <!-- ════════════════════════════════════ FOOTER ════ -->
+    <footer class="site-footer">
+      <div class="footer-inner content-wrap">
+        <div class="footer-brand">
+          <div class="footer-logo">
+            <span class="brand-mark">V</span>
+            <strong>Voltify</strong>
+          </div>
+          <p>India's trusted electronics destination. Genuine products, transparent pricing and seamless delivery — straight to your door.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Shop</h4>
+          <a href="#catalog">All Products</a>
+          <a href="#catalog" onclick="filterCategory('Mobile');return false;">Mobiles</a>
+          <a href="#catalog" onclick="filterCategory('Laptop');return false;">Laptops</a>
+          <a href="#catalog" onclick="filterCategory('Accessories');return false;">Accessories</a>
+        </div>
+        <div class="footer-col">
+          <h4>Account</h4>
+          <a href="#" onclick="document.getElementById('authModal').showModal();return false;">Login</a>
+          <a href="#" onclick="document.getElementById('authModal').showModal();return false;">Register</a>
+          <a href="#orders">Track Orders</a>
+          <a href="#admin">Admin Panel</a>
+        </div>
+        <div class="footer-col">
+          <h4>Help</h4>
+          <a href="#journey">How It Works</a>
+          <a href="#orders">Order Tracking</a>
+          <a href="#top">Back to Top &#8593;</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <div class="footer-bottom-inner content-wrap">
+          <span>&copy; 2026 Voltify Electronics. All rights reserved.</span>
+          <span>Built for modern Indian shoppers.</span>
+        </div>
+      </div>
+    </footer>
+
+  </div><!-- /.page-shell -->
+
+  <!-- ════════════════════════════════════ CART DRAWER ════ -->
+  <aside id="cartDrawer" class="drawer" aria-hidden="true">
+    <div class="drawer-header">
+      <h2>Your Cart</h2>
+      <button id="closeCartButton" class="icon-button" type="button">&times;</button>
+    </div>
+    <div id="cartItems" class="drawer-body"></div>
+    <div class="drawer-footer">
+      <div class="price-line"><span>Total</span><strong id="cartTotal">&#8377;0</strong></div>
+      <button id="checkoutButton" class="primary-button full-width" type="button">Proceed to Checkout</button>
+    </div>
+  </aside>
+
+  <!-- ════════════════════════════════════ PRODUCT MODAL ════ -->
+  <dialog id="productModal" class="modal">
+    <article id="productModalContent" class="modal-content"></article>
+  </dialog>
+
+  <!-- ════════════════════════════════════ AUTH MODAL ════ -->
+  <dialog id="authModal" class="modal">
+    <article class="modal-content auth-modal-content">
+      <div class="modal-header">
+        <div>
+          <p class="eyebrow">Authentication &amp; roles</p>
+          <h2>Login or Create Account</h2>
+        </div>
+        <button id="closeAuthButton" class="icon-button" type="button">&times;</button>
+      </div>
+      <div class="auth-grid">
+        <form id="loginForm" class="stack-form">
+          <h3>Login</h3>
+          <input id="loginEmail" type="email" placeholder="Email" required>
+          <input id="loginPassword" type="password" placeholder="Password" required>
+          <button class="primary-button full-width" type="submit">Login</button>
+        </form>
+        <form id="registerForm" class="stack-form">
+          <h3>Register</h3>
+          <input id="registerName" type="text" placeholder="Full name" required>
+          <input id="registerEmail" type="email" placeholder="Email" required>
+          <input id="registerPassword" type="password" placeholder="Password" required>
+          <button class="secondary-button full-width" type="submit">Create Account</button>
+        </form>
+      </div>
+    </article>
+  </dialog>
+
+  <!-- ════════════════════════════════════ CHECKOUT MODAL ════ -->
+  <dialog id="checkoutModal" class="modal">
+    <article class="modal-content">
+      <div class="modal-header">
+        <div>
+          <p class="eyebrow">Cart &amp; checkout</p>
+          <h2>Complete Your Order</h2>
+        </div>
+        <button id="closeCheckoutButton" class="icon-button" type="button">&times;</button>
+      </div>
+      <form id="checkoutForm" class="stack-form">
+        <input id="checkoutName" type="text" placeholder="Full name" required>
+        <input id="checkoutEmail" type="email" placeholder="Email" required>
+        <input id="checkoutAddress" type="text" placeholder="Shipping address" required>
+        <textarea id="checkoutNotes" rows="3" placeholder="Order notes (optional)"></textarea>
+        <button class="primary-button full-width" type="submit">Place Order</button>
+      </form>
+    </article>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
