@@ -394,6 +394,77 @@ main { flex: 1; }
 }
 
 /* ═══════════════════════════════════════════════════════
+   MARQUEE (Bank Offers + Deals of the Day)
+═══════════════════════════════════════════════════════ */
+.marquee {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  mask-image: linear-gradient(to right, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%);
+}
+.marquee-track {
+  display: inline-flex;
+  gap: 10px;
+  white-space: nowrap;
+  animation: marquee-scroll 38s linear infinite;
+  will-change: transform;
+}
+.marquee-track--reverse {
+  animation: marquee-scroll-reverse 42s linear infinite;
+}
+.marquee:hover .marquee-track { animation-play-state: paused; }
+@keyframes marquee-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+@keyframes marquee-scroll-reverse {
+  from { transform: translateX(-50%); }
+  to   { transform: translateX(0); }
+}
+
+/* Deals strip (Croma-style red accent) */
+.deals-strip {
+  background: linear-gradient(90deg, #12080d 0%, #2a0f1a 50%, #12080d 100%);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+}
+.deals-strip .content-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+.deals-label {
+  white-space: nowrap;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #ff5a5f;
+  flex-shrink: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  padding-right: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.deal-tag {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 14px;
+  background: rgba(255, 90, 95, 0.12);
+  border: 1px solid rgba(255, 90, 95, 0.4);
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #ffd2d4;
+  flex-shrink: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track,
+  .marquee-track--reverse { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════
    SECTION WRAP
 ═══════════════════════════════════════════════════════ */
 .section-wrap {
