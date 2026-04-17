@@ -57,9 +57,64 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT UNIQUE NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS contact_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    phone TEXT,
+    subject TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS support_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT UNIQUE NOT NULL,
+    email TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS checkout_email_otps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_token TEXT NOT NULL,
+    email TEXT NOT NULL,
+    code TEXT NOT NULL,
+    verified INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+`);
+
 ensureProductColumn("images_json", "TEXT NOT NULL DEFAULT '[]'");
+try { db.exec("ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'COD'"); } catch (_e) { /* exists */ }
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS product_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    user_email TEXT NOT NULL,
+    user_name TEXT NOT NULL,
+    rating INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(user_email, product_id)
+  );
+  CREATE TABLE IF NOT EXISTS wishlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_email TEXT NOT NULL,
+    product_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(user_email, product_id)
+  );
+`);
 
 seedProductsIfNeeded();
+fixProductCategoryImageMismatch();
 
 function ensureProductColumn(columnName, sqlType) {
   const columns = db.prepare("PRAGMA table_info(products)").all();
@@ -71,7 +126,7 @@ function ensureProductColumn(columnName, sqlType) {
 function seedProductsIfNeeded() {
   const existing = db.prepare("SELECT COUNT(*) AS count FROM products").get().count;
   const hasPlaceholderNames = existing
-    ? db.prepare("SELECT COUNT(*) AS count FROM products WHERE name LIKE 'ElectroHub %' OR brand = 'ElectroHub'").get().count > 0
+    ? db.prepare("SELECT COUNT(*) AS count FROM products WHERE name LIKE 'MAPLE %' OR brand = 'MAPLE'").get().count > 0
     : false;
   const hasRemoteImages = existing
     ? db.prepare("SELECT COUNT(*) AS count FROM products WHERE image LIKE 'http%'").get().count > 0
@@ -118,6 +173,35 @@ function seedProductsIfNeeded() {
 
 function buildSeedProducts() {
   return buildOverhaulSeedProducts();
+}
+
+// Task 6: ensure each product's images use ONLY its own single matching photo (same image 3×)
+// so gallery thumbnails never show unrelated items.
+function fixProductCategoryImageMismatch() {
+  try {
+    const rows = db.prepare("SELECT id, category, images_json, image FROM products ORDER BY id").all();
+    const slugMap = { "Laptops": "laptops", "Mobiles": "mobiles", "Headphones": "headphones", "Mouse": "mouse" };
+    const update = db.prepare("UPDATE products SET images_json = ?, image = ? WHERE id = ?");
+    const perCatCounter = {};
+    rows.forEach((row) => {
+      const catSlug = slugMap[row.category];
+      if (!catSlug) return;
+      perCatCounter[catSlug] = (perCatCounter[catSlug] || 0) + 1;
+      const n = ((perCatCounter[catSlug] - 1) % 30) + 1;
+      const src = `/public/assets/products-v3/${catSlug}/${catSlug}-${String(n).padStart(2, "0")}.jpg`;
+      let imgs = [];
+      try { imgs = JSON.parse(row.images_json || "[]"); } catch { imgs = []; }
+      const detailImg = `/public/assets/products-v3/${catSlug}/${catSlug}-detail.jpg`;
+      const lifestyleImg = `/public/assets/products-v3/${catSlug}/${catSlug}-lifestyle.jpg`;
+      const expectedImgs = [src, detailImg, lifestyleImg];
+      const needsFix = imgs.length !== 3 || imgs[0] !== src || imgs[1] !== detailImg || imgs[2] !== lifestyleImg;
+      if (needsFix) {
+        update.run(JSON.stringify(expectedImgs), src, row.id);
+      }
+    });
+  } catch (err) {
+    console.warn("[image-fix] skipped:", err.message);
+  }
 }
 
 function buildSeedProductsLegacy_UNUSED() {
@@ -336,9 +420,11 @@ function buildSeedProductsLegacy_UNUSED() {
 
 function buildOverhaulSeedProducts() {
   const IMG = (cat, n) => `/public/assets/products-v3/${cat}/${cat}-${String(n).padStart(2, "0")}.jpg`;
+  // Each product uses its own single matching image, repeated for the 3 gallery slots.
+  // This guarantees that all gallery thumbnails show the same product photo (no cross-variant mismatches).
   const images3 = (cat, n) => {
-    const a = n, b = ((n % 30) + 1), c = (((n + 1) % 30) + 1);
-    return [IMG(cat, a), IMG(cat, b), IMG(cat, c)];
+    const src = IMG(cat, n);
+    return [src, `/public/assets/products-v3/${cat}/${cat}-detail.jpg`, `/public/assets/products-v3/${cat}/${cat}-lifestyle.jpg`];
   };
   const rating = (i) => Number((3.6 + ((i * 37) % 14) * 0.1).toFixed(1));
   const reviews = (i) => 50 + ((i * 131) % 9450);
@@ -571,6 +657,74 @@ function slugify(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+// === Razorpay helpers (zero-dep via https) ===
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "";
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
+function razorpayConfigured() {
+  return Boolean(
+    RAZORPAY_KEY_ID &&
+    RAZORPAY_KEY_SECRET &&
+    !RAZORPAY_KEY_ID.includes("xxxx") &&
+    !RAZORPAY_KEY_SECRET.includes("xxxx")
+  );
+}
+function createRazorpayOrder(amountPaise) {
+  return new Promise((resolve, reject) => {
+    if (!razorpayConfigured()) {
+      reject(new Error("Razorpay keys not configured"));
+      return;
+    }
+    const https = require("https");
+    const body = JSON.stringify({
+      amount: Math.round(amountPaise),
+      currency: "INR",
+      receipt: "rcpt_" + Date.now(),
+      payment_capture: 1
+    });
+    const auth = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString("base64");
+    const req = https.request({
+      hostname: "api.razorpay.com",
+      path: "/v1/orders",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+        "Authorization": `Basic ${auth}`
+      }
+    }, (res) => {
+      let chunks = "";
+      res.on("data", (c) => { chunks += c; });
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(chunks || "{}");
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(parsed);
+          } else {
+            reject(new Error(parsed?.error?.description || `Razorpay error (${res.statusCode})`));
+          }
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+function verifyRazorpaySignature(orderId, paymentId, signature) {
+  if (!RAZORPAY_KEY_SECRET) return false;
+  const expected = crypto
+    .createHmac("sha256", RAZORPAY_KEY_SECRET)
+    .update(`${orderId}|${paymentId}`)
+    .digest("hex");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(signature)));
+  } catch {
+    return false;
+  }
+}
+
 function currency(value) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -667,7 +821,16 @@ function nav(currentPath) {
   }).join("");
 }
 
-function layout({ title, description = "", currentPath = "/", content, user = null }) {
+function layout({ title, description = "", currentPath = "/", content, user = null, meta = "", ogImage = "", req = null, theme, userAddress }) {
+  const _ctx = globalThis.__mapleCtx || {};
+  if (theme === undefined) theme = _ctx.theme || "snow";
+  if (userAddress === undefined) userAddress = _ctx.userAddress || null;
+  const _ogImg = ogImage || "/public/assets/products-v2/prod-001.jpg";
+  const addrLabel = userAddress && userAddress.pin
+    ? `📍 ${escapeHtml(userAddress.city || "")}, ${escapeHtml(userAddress.state || "")} – ${escapeHtml(userAddress.pin)}`
+    : `📍 Set delivery location`;
+  const themeClass = `theme-${(theme || "snow").replace(/[^a-z]/gi, "") || "snow"}`;
+  const INDIAN_STATES = ["Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","Goa","Gujarat","Haryana","Himachal Pradesh","Jharkhand","Karnataka","Kerala","Madhya Pradesh","Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West Bengal","Delhi","Jammu and Kashmir","Ladakh","Puducherry","Chandigarh","Andaman and Nicobar Islands","Dadra and Nagar Haveli and Daman and Diu","Lakshadweep"];
   return `<!DOCTYPE html>
   <html lang="en">
   <head>
@@ -675,16 +838,22 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${escapeHtml(title)}</title>
     <meta name="description" content="${escapeHtml(description || title)}">
+    <meta property="og:title" content="${escapeHtml(title)}">
+    <meta property="og:description" content="${escapeHtml(description || title)}">
+    <meta property="og:image" content="${escapeHtml(_ogImg)}">
+    <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary_large_image">
+    ${meta || ""}
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/public/app.css">
   </head>
-  <body>
+  <body class="${themeClass}" data-logged-in="${user ? "true" : "false"}">
     <div class="shell">
-      <header class="site-header">
-        <a class="brand" href="/">
-          <span class="brand-word">electrohub</span>
+      <header class="site-header mp-header">
+        <a class="brand mp-brand" href="/">
+          <span class="mp-brand-mark" aria-hidden="true">M</span><span class="brand-word">MAPLE</span>
         </a>
         <a class="menu-link" href="/products">☰ <span>Menu</span></a>
         <div class="header-tools">
@@ -692,50 +861,41 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
             <input type="search" name="q" placeholder="What are you looking for ?">
           </form>
           <div class="header-meta">
-            <span class="location-pill">📍 Mumbai, 400049</span>
+            <button type="button" class="mp-addr-btn" data-mp-addr-open aria-label="Set delivery location">${addrLabel}</button>
             ${user
-              ? `<a class="account-link" href="/account">${escapeHtml(user.name.split(" ")[0])}</a>`
-              : `<a class="account-link" href="/login">👤</a>`}
+              ? `<a class="account-link" href="/account">${escapeHtml(user.name.split(" ")[0])}</a>
+                 <form action="/auth/logout" method="POST" class="mp-logout-form"><button class="mp-logout-btn" type="submit">Logout</button></form>`
+              : `<a class="account-link" href="/login">👤 Sign in</a>`}
+            ${user ? `<a class="mp-wish-link" href="/wishlist" aria-label="Wishlist">♥ <span data-wish-count>${(() => { try { return db.prepare("SELECT COUNT(*) AS c FROM wishlists WHERE user_email=?").get(user.email).c; } catch { return 0; } })()}</span></a>` : ""}
             <a class="cart-pill" href="/cart">🛒 <span data-cart-count>0</span></a>
           </div>
         </div>
       </header>
+      <dialog class="mp-addr-dialog" data-mp-addr-dialog>
+        <form method="dialog" class="mp-addr-form" data-mp-addr-form>
+          <h3>Choose delivery location</h3>
+          <label>District / City<input name="city" required value="${escapeHtml(userAddress?.city || "")}"></label>
+          <label>State
+            <select name="state" required>
+              <option value="">Select state</option>
+              ${INDIAN_STATES.map(s => `<option ${userAddress?.state === s ? "selected" : ""}>${s}</option>`).join("")}
+            </select>
+          </label>
+          <label>PIN Code<input name="pin" pattern="\\d{6}" maxlength="6" required value="${escapeHtml(userAddress?.pin || "")}"></label>
+          <div class="mp-addr-actions">
+            <button type="button" data-mp-addr-cancel class="mp-ghost">Cancel</button>
+            <button type="submit" class="mp-primary">Save</button>
+          </div>
+        </form>
+      </dialog>
       <div class="sub-nav"><nav class="main-nav">${nav(currentPath)}</nav></div>
       <div class="category-rail">
         ${getCategories().map((item) => `<a href="/category/${slugify(item.category)}">${escapeHtml(item.category)}</a>`).join("")}
       </div>
       ${content}
-      <footer class="site-footer">
-        <div class="footer-inner">
-          <div class="footer-brand">
-            <span class="brand-word">electrohub</span>
-            <p>Your trusted destination for electronics, gadgets, and everyday tech.</p>
-          </div>
-          <div class="footer-col">
-            <h4>Shop</h4>
-            <a href="/products">All Products</a>
-            <a href="/category/laptops">Laptops</a>
-            <a href="/category/mobiles">Mobiles</a>
-            <a href="/category/headphones">Headphones</a>
-            <a href="/category/mouse">Mouse</a>
-          </div>
-          <div class="footer-col">
-            <h4>Account</h4>
-            ${user
-              ? `<a href="/account">My Account</a>`
-              : `<a href="/login">Sign In / Register</a>`}
-            <a href="/account">My Orders</a>
-            <a href="/track">Track Order</a>
-            <a href="/cart">Cart</a>
-            ${user ? `<form action="/auth/logout" method="POST" style="margin:0"><button style="background:none;padding:0;color:var(--muted);font-size:0.88rem;font-weight:600;cursor:pointer;font-family:inherit">Sign Out</button></form>` : ""}
-          </div>
-        </div>
-        <div class="footer-bottom">
-          <span>© 2025 ElectroHub. All rights reserved.</span>
-          <span>Built for modern shoppers.</span>
-        </div>
-      </footer>
+      ${renderCromaFooter()}
     </div>
+    <script>window.__MAPLE_THEME__=${JSON.stringify(theme || "snow")};</script>
     <script src="/public/app.js"></script>
   </body>
   </html>`;
@@ -756,6 +916,16 @@ async function getCurrentUser(req) {
   if (!cookies.session_token || !dataLayer) return null;
   const session = await dataLayer.getSession(cookies.session_token);
   return session?.user || null;
+}
+
+function getRequestContext(req) {
+  const cookies = parseCookies(req);
+  let addr = null;
+  if (cookies.mp_addr) {
+    try { addr = JSON.parse(cookies.mp_addr); } catch { addr = null; }
+  }
+  const theme = (cookies.mp_theme || "snow").replace(/[^a-z]/g, "") || "snow";
+  return { theme, userAddress: addr };
 }
 
 function setSessionCookie(res, token, expiresAt) {
@@ -1147,7 +1317,7 @@ function legacyHomePage(user = null) {
   );
 
   return layout({
-    title: "ElectroHub | Electronics",
+    title: "MAPLE | Electronics",
     description: "Multi-page electronics website with 50+ products, shopping cart, checkout, and order tracking.",
     currentPath: "/",
     user,
@@ -1345,6 +1515,7 @@ function homePage(user = null) {
   const newArrivals = products.slice(4, 8);
   const featureItems = products.slice(8, 10);
   const popular = products.slice(10, 18);
+  void recommended; void newArrivals; void featureItems; void popular;
 
   const formatPrice = (n) => "\u20B9" + Number(n).toLocaleString("en-IN");
 
@@ -1365,41 +1536,67 @@ function homePage(user = null) {
 
   const slides = [
     {
-      kicker: "New launch",
-      title: "iPhone 12 Mini",
-      subtitle: "Meet the Apple iPhone 12 Mini, Fotos contain lorem.",
-      cta: "Shop now",
-      image: "/public/assets/products-v2/prod-001.jpg",
-      bg: "linear-gradient(135deg, #e9d8fd 0%, #f3e8ff 60%, #fce7f3 100%)"
+      kicker: "Up to ₹12,000 off",
+      title: "MAPLE Mobiles",
+      subtitle: "iPhone 15, Galaxy S24, Pixel 9 Pro and more — premium smartphones, certified genuine.",
+      cta: "Shop Mobiles",
+      href: "/category/mobiles",
+      image: "/public/assets/products-v3/mobiles/mobiles-01.jpg",
+      bg: "linear-gradient(135deg, #0f1a2e 0%, #1b2a4a 55%, #c9a24b 100%)",
+      fg: "#fff"
     },
     {
-      kicker: "Flagship",
-      title: "Samsung Galaxy",
-      subtitle: "Redefine your view with a 200MP camera and Dynamic AMOLED.",
-      cta: "Explore",
-      image: "/public/assets/products-v2/prod-002.jpg",
-      bg: "linear-gradient(135deg, #fed7aa 0%, #fde68a 55%, #fecaca 100%)"
+      kicker: "Work. Create. Play.",
+      title: "Laptops for creators &amp; pros",
+      subtitle: "MacBook, ThinkPad, XPS and gaming rigs engineered for every workload.",
+      cta: "Shop Laptops",
+      href: "/category/laptops",
+      image: "/public/assets/products-v3/laptops/laptops-01.jpg",
+      bg: "linear-gradient(135deg, #22252b 0%, #3b3f48 50%, #ff6b5b 100%)",
+      fg: "#fff"
     },
     {
-      kicker: "For creators",
-      title: "MacBook Pro",
-      subtitle: "Think differently. Built on the blazing-fast Apple M3 Pro chip.",
-      cta: "Discover",
-      image: "/public/assets/products-v2/prod-007.jpg",
-      bg: "linear-gradient(135deg, #1f2937 0%, #111827 60%, #0f172a 100%)"
+      kicker: "Pure silence",
+      title: "Noise-cancelling headphones",
+      subtitle: "Sony, Bose, Sennheiser — studio-tuned sound with all-day comfort.",
+      cta: "Shop Headphones",
+      href: "/category/headphones",
+      image: "/public/assets/products-v3/headphones/headphones-01.jpg",
+      bg: "linear-gradient(135deg, #123524 0%, #1f4d38 55%, #fff4d8 100%)",
+      fg: "#fff"
+    },
+    {
+      kicker: "Level up",
+      title: "Precision gaming mice",
+      subtitle: "Logitech, Razer, Corsair — up to 32,000 DPI with tournament-grade switches.",
+      cta: "Shop Mouse",
+      href: "/category/mouse",
+      image: "/public/assets/products-v3/mouse/mouse-01.jpg",
+      bg: "linear-gradient(135deg, #2f3540 0%, #3c4250 55%, #9fe7c4 100%)",
+      fg: "#fff"
+    },
+    {
+      kicker: "Fresh in",
+      title: "New arrivals — up to 15% off",
+      subtitle: "Latest launches hand-picked by our editors. Free delivery above ₹999.",
+      cta: "Explore new",
+      href: "/products?sort=newest",
+      image: "/public/assets/products-v3/laptops/laptops-10.jpg",
+      bg: "linear-gradient(135deg, #3d1f44 0%, #5b2f66 55%, #e9b8b0 100%)",
+      fg: "#fff"
     }
   ];
 
   const slidesHTML = slides.map((s, i) => `
-    <div class="v2-slide${i === 0 ? " is-active" : ""}" data-v2-slide="${i}" style="background:${s.bg};${i === 2 ? "color:#f9fafb;" : ""}">
+    <div class="v2-slide${i === 0 ? " is-active" : ""}" data-v2-slide="${i}" style="background:${s.bg};color:${s.fg};">
       <div class="v2-slide-text">
-        <span class="v2-slide-kicker">${escapeHtml(s.kicker)}</span>
-        <h2 class="v2-slide-title">${escapeHtml(s.title)}</h2>
+        <span class="v2-slide-kicker">${s.kicker}</span>
+        <h2 class="v2-slide-title">${s.title}</h2>
         <p class="v2-slide-sub">${escapeHtml(s.subtitle)}</p>
-        <a class="v2-slide-cta" href="/products">${escapeHtml(s.cta)}</a>
+        <a class="v2-slide-cta" href="${escapeHtml(s.href)}">${escapeHtml(s.cta)} →</a>
       </div>
       <div class="v2-slide-media">
-        <img src="${escapeHtml(s.image)}" alt="${escapeHtml(s.title)}">
+        <img src="${escapeHtml(s.image)}" alt="${s.title}" loading="eager">
       </div>
     </div>
   `).join("");
@@ -1414,14 +1611,41 @@ function homePage(user = null) {
     { title: "Secure checkout", text: "256-bit SSL and tokenised payments keep your data protected.", icon: "\uD83D\uDD12", bg: "#fef9c3" }
   ];
 
+  // Live DB-driven content
+  const dbBrands = (() => {
+    try { return db.prepare("SELECT DISTINCT brand FROM products LIMIT 12").all().map(r => r.brand).filter(Boolean); }
+    catch { return brands; }
+  })();
+  const categoryCards = ["Laptops","Mobiles","Headphones","Mouse"].map(cat => {
+    const row = db.prepare("SELECT image FROM products WHERE category = ? ORDER BY id LIMIT 1").get(cat);
+    return { name: cat, slug: slugify(cat), image: row?.image || "/public/assets/products-v2/prod-001.jpg" };
+  });
+  const trending = db.prepare("SELECT * FROM products ORDER BY RANDOM() LIMIT 8").all().map(normalizeProduct);
+  const deals = (() => {
+    try {
+      return db.prepare(`
+        SELECT *, (original_price - price) * 1.0 / NULLIF(original_price, 0) AS discount_pct
+        FROM products
+        WHERE original_price > price
+        ORDER BY discount_pct DESC
+        LIMIT 4
+      `).all().map(normalizeProduct);
+    } catch { return []; }
+  })();
+  const priceBuckets = [
+    { label: "Under ₹10,000", href: "/products?maxPrice=10000", bg: "linear-gradient(135deg,#e0f2fe,#bae6fd)" },
+    { label: "₹10K – ₹30K", href: "/products?minPrice=10000&maxPrice=30000", bg: "linear-gradient(135deg,#fef3c7,#fde68a)" },
+    { label: "₹30K – ₹80K", href: "/products?minPrice=30000&maxPrice=80000", bg: "linear-gradient(135deg,#fce7f3,#fbcfe8)" },
+    { label: "Over ₹80,000", href: "/products?minPrice=80000", bg: "linear-gradient(135deg,#ddd6fe,#c7d2fe)" }
+  ];
   return layout({
-    title: "ElectroHub \u2014 Electronics reimagined",
-    description: "Discover phones, laptops, audio, cameras and more curated for you.",
+    title: "MAPLE \u2014 Electronics reimagined",
+    description: "MAPLE — India's modern electronics store for phones, laptops, audio and more.",
     currentPath: "/",
     user,
     content: `
-      <main class="v2-home">
-        <section class="v2-hero" data-v2-carousel>
+      <main class="v2-home mp-home">
+        <section class="v2-hero mp-hero" data-v2-carousel>
           <div class="v2-hero-track">
             ${slidesHTML}
           </div>
@@ -1430,96 +1654,91 @@ function homePage(user = null) {
           <div class="v2-hero-dots">${dotsHTML}</div>
         </section>
 
-        <section class="v2-brands">
-          ${brands.map(b => `<span class="v2-brand">${escapeHtml(b)}</span>`).join("")}
-        </section>
-
-        <section class="v2-section v2-recommended">
-          <div class="v2-section-head">
-            <h2>Recommended for you</h2>
-            <a class="v2-section-link" href="/products">View all</a>
-          </div>
-          <div class="v2-grid-row">
-            ${recommended.map(productCardV2).join("")}
+        <section class="mp-section mp-brands-section">
+          <div class="mp-section-head"><h2>Shop by Brand</h2></div>
+          <div class="mp-brand-strip">
+            ${dbBrands.map(b => `<a class="mp-brand-pill" href="/products?brand=${encodeURIComponent(b)}">${escapeHtml(b)}</a>`).join("")}
           </div>
         </section>
 
-        <section class="v2-section v2-offers">
-          <div class="v2-section-head"><h2>Our offers</h2></div>
-          <div class="v2-offers-row">
-            ${offers.map(o => `
-              <article class="v2-offer-card" style="background:${o.bg}">
-                <div class="v2-offer-icon" aria-hidden="true">${o.icon}</div>
-                <h3>${escapeHtml(o.title)}</h3>
-                <p>${escapeHtml(o.text)}</p>
-              </article>
-            `).join("")}
-          </div>
-        </section>
-
-        <section class="v2-section v2-grid">
-          <div class="v2-section-head">
-            <h2>New arrivals</h2>
-            <a class="v2-section-link" href="/products">View all</a>
-          </div>
-          <div class="v2-grid-row">
-            ${newArrivals.map(productCardV2).join("")}
-          </div>
-        </section>
-
-        <section class="v2-feature-banner">
-          <div class="v2-feature-intro">
-            <span class="v2-feature-kicker">Premium picks</span>
-            <h2>Power meets design</h2>
-            <p>Flagship performance from the brands you love, ready to ship today.</p>
-            <a class="v2-feature-cta" href="/products">Browse premium</a>
-          </div>
-          <div class="v2-feature-row">
-            ${featureItems.map(p => `
-              <a class="v2-feature-card" href="/products">
-                <img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" loading="lazy">
-                <div class="v2-feature-body">
-                  <span class="v2-feature-brand">${escapeHtml(p.brand)}</span>
-                  <h3>${escapeHtml(p.name)}</h3>
-                  <div class="v2-feature-price-row">
-                    <span class="v2-feature-price">${formatPrice(p.price)}</span>
-                    <span class="v2-feature-strike">${formatPrice(p.originalPrice)}</span>
-                  </div>
-                </div>
+        <section class="mp-section">
+          <div class="mp-section-head"><h2>Featured Categories</h2></div>
+          <div class="mp-cat-grid">
+            ${categoryCards.map(c => `
+              <a class="mp-cat-card" href="/category/${c.slug}">
+                <div class="mp-cat-media"><img src="${escapeHtml(c.image)}" alt="${escapeHtml(c.name)}" loading="lazy"></div>
+                <h3>${escapeHtml(c.name)}</h3>
+                <span class="mp-cat-cta">Shop ${escapeHtml(c.name)} →</span>
               </a>
             `).join("")}
           </div>
         </section>
 
-        <section class="v2-section v2-popular">
-          <div class="v2-section-head">
-            <h2>Popular items</h2>
-            <a class="v2-section-link" href="/products">View all</a>
-          </div>
-          <div class="v2-grid-row v2-grid-row-8">
-            ${popular.map(productCardV2).join("")}
+        <section class="mp-section">
+          <div class="mp-section-head"><h2>Trending Now</h2><a class="mp-link" href="/products">View all</a></div>
+          <div class="mp-trending-rail">
+            ${trending.map(p => `
+              <a class="mp-trend-card" href="/product/${p.slug}">
+                <div class="mp-trend-media"><img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" loading="lazy"></div>
+                <span class="mp-trend-brand">${escapeHtml(p.brand)}</span>
+                <h3>${escapeHtml(p.name)}</h3>
+                <div class="mp-trend-price">${currency(p.price)}</div>
+              </a>
+            `).join("")}
           </div>
         </section>
 
-        <section class="v2-newsletter">
-          <div class="v2-news-inner">
-            <div class="v2-news-illus" aria-hidden="true">
-              <svg viewBox="0 0 120 120" width="120" height="120" xmlns="http://www.w3.org/2000/svg">
-                <rect x="10" y="30" width="100" height="65" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
-                <path d="M10 35 L60 72 L110 35" fill="none" stroke="#f59e0b" stroke-width="2"/>
-                <circle cx="95" cy="30" r="14" fill="#fbbf24"/>
-                <path d="M88 30 L93 35 L102 26" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <div class="v2-news-body">
-              <h2>Subscribe to our newsletter</h2>
-              <p>Get early access to launches, exclusive drops and subscriber-only discounts.</p>
-              <form class="v2-news-form" action="/subscribe" method="POST">
-                <input type="email" name="email" placeholder="you@example.com" required>
-                <button type="submit">Subscribe</button>
-              </form>
-            </div>
+        <section class="mp-section mp-why mp-why-v2">
+          <div class="mp-section-head"><h2>Why shop MAPLE</h2></div>
+          <div class="mp-why-grid">
+            <article class="mp-why-card mp-why-tile"><div class="mp-why-icon" aria-hidden="true">✓</div><h3>100% Genuine</h3><p>Every product sourced from brands and authorised distributors.</p></article>
+            <article class="mp-why-card mp-why-tile"><div class="mp-why-icon" aria-hidden="true">⚡</div><h3>Free Delivery ₹999+</h3><p>Fast, trackable shipping to 18,000+ pincodes across India.</p></article>
+            <article class="mp-why-card mp-why-tile"><div class="mp-why-icon" aria-hidden="true">↺</div><h3>30-Day Easy Returns</h3><p>Change of mind? Send it back within 30 days — no hassle.</p></article>
           </div>
+        </section>
+
+        <section class="mp-section">
+          <div class="mp-section-head"><h2>Deals of the week</h2><a class="mp-link" href="/products?sort=discount">View all</a></div>
+          <div class="mp-trending-rail">
+            ${deals.length ? deals.map(p => {
+              const off = p.original_price > p.price ? Math.round(((p.original_price - p.price)/p.original_price)*100) : 0;
+              return `
+                <a class="mp-trend-card mp-deal-card" href="/product/${p.slug}">
+                  <div class="mp-trend-media"><img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" loading="lazy">${off ? `<span class="mp-deal-badge">${off}% off</span>` : ""}</div>
+                  <span class="mp-trend-brand">${escapeHtml(p.brand)}</span>
+                  <h3>${escapeHtml(p.name)}</h3>
+                  <div class="mp-trend-price">${currency(p.price)} ${p.original_price > p.price ? `<del>${currency(p.original_price)}</del>` : ""}</div>
+                </a>
+              `;
+            }).join("") : `<p class="subtle">Check back soon for discounted products.</p>`}
+          </div>
+        </section>
+
+        <section class="mp-section">
+          <div class="mp-section-head"><h2>Shop by Price</h2></div>
+          <div class="mp-price-grid">
+            ${priceBuckets.map(b => `
+              <a class="mp-price-card" href="${escapeHtml(b.href)}" style="background:${b.bg}">
+                <span class="mp-eyebrow">Explore</span>
+                <h3>${b.label}</h3>
+                <span class="mp-price-cta">Shop →</span>
+              </a>
+            `).join("")}
+          </div>
+        </section>
+
+        <section class="mp-section mp-news-section">
+          <form class="mp-news-form" data-mp-newsletter>
+            <div>
+              <h2>Join the Maple newsletter</h2>
+              <p>Early access to launches and subscriber-only discounts.</p>
+            </div>
+            <div class="mp-news-row">
+              <input type="email" name="email" placeholder="you@example.com" required>
+              <button type="submit" class="mp-primary">Subscribe</button>
+            </div>
+            <p class="mp-news-msg" data-mp-newsletter-msg></p>
+          </form>
         </section>
       </main>
     `
@@ -1528,17 +1747,26 @@ function homePage(user = null) {
 
 function renderCromaFooter() {
   return `
-    <footer class="cr-footer">
+    <footer class="cr-footer mp-footer">
       <div class="cr-footer-top">
         <div class="cr-footer-col cr-footer-brand">
-          <span class="brand-word">electrohub</span>
+          <span class="mp-brand-mark" aria-hidden="true">M</span><span class="brand-word">MAPLE</span>
           <p>India's favourite destination for electronics, gadgets & appliances.</p>
-          <div class="cr-footer-social">
-            <a href="#" aria-label="Facebook">f</a>
-            <a href="#" aria-label="Instagram">IG</a>
-            <a href="#" aria-label="Twitter">X</a>
-            <a href="#" aria-label="YouTube">YT</a>
+          <div class="cr-footer-social mp-social">
+            <a href="https://instagram.com/maple" aria-label="Instagram" target="_blank" rel="noopener"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor"/></svg></a>
+            <a href="https://youtube.com/@maple" aria-label="YouTube" target="_blank" rel="noopener"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M21.6 7.2a2.6 2.6 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4A2.6 2.6 0 0 0 2.4 7.2 27 27 0 0 0 2 12a27 27 0 0 0 .4 4.8 2.6 2.6 0 0 0 1.8 1.8C5.8 19 12 19 12 19s6.2 0 7.8-.4a2.6 2.6 0 0 0 1.8-1.8A27 27 0 0 0 22 12a27 27 0 0 0-.4-4.8ZM10 15V9l5 3Z"/></svg></a>
           </div>
+        </div>
+        <div class="cr-footer-col">
+          <h4>About Maple</h4>
+          <a href="/about">About Maple</a>
+          <a href="/contact">Contact Us</a>
+        </div>
+        <div class="cr-footer-col">
+          <h4>Services</h4>
+          <a href="/services">Services</a>
+          <a href="/track">Track Order</a>
+          <a href="/contact">Help Center</a>
         </div>
         <div class="cr-footer-col">
           <h4>Shop</h4>
@@ -1549,41 +1777,15 @@ function renderCromaFooter() {
           <a href="/products">All Products</a>
         </div>
         <div class="cr-footer-col">
-          <h4>Customer Service</h4>
-          <a href="/track">Track Order</a>
-          <a href="#">Shipping & Delivery</a>
-          <a href="#">Returns & Refunds</a>
-          <a href="#">Cancellation Policy</a>
-          <a href="#">Help & Support</a>
-        </div>
-        <div class="cr-footer-col">
-          <h4>About ElectroHub</h4>
-          <a href="#">Our Story</a>
-          <a href="#">Store Locator</a>
-          <a href="#">Careers</a>
-          <a href="#">Press Room</a>
-          <a href="#">Investor Relations</a>
-        </div>
-        <div class="cr-footer-col">
           <h4>Legal</h4>
-          <a href="#">Terms of Use</a>
-          <a href="#">Privacy Policy</a>
-          <a href="#">Disclaimer</a>
-          <a href="#">Sitemap</a>
-        </div>
-      </div>
-      <div class="cr-footer-apps">
-        <div class="cr-footer-apps-text">
-          <strong>Download the ElectroHub app</strong>
-          <span>Exclusive offers, order tracking & wishlist on the go.</span>
-        </div>
-        <div class="cr-footer-apps-badges">
-          <a href="#" class="cr-footer-badge">App Store</a>
-          <a href="#" class="cr-footer-badge">Google Play</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="/disclaimer">Disclaimer</a>
+          <a href="/refund">Refund &amp; Returns</a>
         </div>
       </div>
       <div class="cr-footer-bottom">
-        <span>© 2026 ElectroHub Services Ltd. All rights reserved.</span>
+        <span>© 2026 MAPLE Core Inc. All rights reserved.</span>
         <span>Made in India</span>
       </div>
     </footer>
@@ -1678,8 +1880,10 @@ function productsPage(url, forcedCategory = "", user = null) {
   const showConnectionFilter = category === "Headphones" || category === "Mouse";
 
   return layout({
-    title: category ? `${category} | ElectroHub` : "All Products | ElectroHub",
-    description: "Browse the full electronics catalog with filters and sorting.",
+    title: category ? `${category} – MAPLE` : "All Products – MAPLE",
+    description: category
+      ? `Shop ${category} at MAPLE — compare specs, prices, and ratings across top brands.`
+      : "Browse 120+ electronics — laptops, mobiles, headphones, and mouse — with free delivery.",
     currentPath: "/products",
     user,
     content: `
@@ -1798,8 +2002,16 @@ function productsPage(url, forcedCategory = "", user = null) {
               <span class="cr-chip cr-chip-muted">In Stock</span>
             </div>
             <div class="cr-list-grid">
-              ${items.map(productCard).join("")}
+              ${items.length ? items.map(productCard).join("") : ""}
             </div>
+            ${items.length === 0 ? `
+              <div class="eh-empty-state">
+                <div class="eh-empty-icon" aria-hidden="true">🔍</div>
+                <h3>No products match your filters.</h3>
+                <p>Try clearing some filters to see more results.</p>
+                <a class="primary-button" href="${category ? `/category/${slugify(category)}` : "/products"}">Clear all</a>
+              </div>
+            ` : ""}
             <nav class="cr-list-pagination">
               ${Array.from({ length: pages }, (_, index) => {
                 const number = index + 1;
@@ -1814,7 +2026,6 @@ function productsPage(url, forcedCategory = "", user = null) {
           </section>
         </div>
       </main>
-      ${renderCromaFooter()}
     `
   });
 }
@@ -1881,7 +2092,7 @@ function legacyProductDetailPage(slug, user = null) {
   ];
 
   return layout({
-    title: `${product.name} | ElectroHub`,
+    title: `${product.name} | MAPLE`,
     description: product.description,
     currentPath: "/products",
     user,
@@ -1962,7 +2173,7 @@ function legacyProductDetailPage(slug, user = null) {
             ${specs.map((spec) => `<div class="summary-line border-row"><span>${escapeHtml(spec)}</span><strong>Included</strong></div>`).join("")}
           </article>
           <article class="panel-card">
-            <h2>Why buy from ElectroHub</h2>
+            <h2>Why buy from MAPLE</h2>
             <div class="summary-line border-row"><span>Installation & guidance</span><strong>Available</strong></div>
             <div class="summary-line border-row"><span>Secure checkout</span><strong>Enabled</strong></div>
             <div class="summary-line border-row"><span>Order tracking</span><strong>Live</strong></div>
@@ -2024,7 +2235,7 @@ function productDetailPageLegacyV2(slug, user = null) {
   ];
 
   return layout({
-    title: `${product.name} | ElectroHub`,
+    title: `${product.name} | MAPLE`,
     description: product.description,
     currentPath: "/products",
     user,
@@ -2262,7 +2473,7 @@ function productDetailPageLegacyV3(slug, user = null) {
   ];
 
   return layout({
-    title: `${product.name} | ElectroHub`,
+    title: `${product.name} | MAPLE`,
     description: product.description,
     currentPath: "/products",
     user,
@@ -2466,7 +2677,7 @@ function productDetailPageCleanLegacyV4(slug, user = null) {
   const galleryItems = product.images.slice(0, 3);
 
   return layout({
-    title: `${product.name} | ElectroHub`,
+    title: `${product.name} | MAPLE`,
     description: product.description,
     currentPath: "/products",
     user,
@@ -2584,138 +2795,226 @@ function productDetailPage(slug, user = null) {
   const familyVariants = getFamilyVariants(product);
   const memoryVariants = [...new Map(familyVariants.filter((item) => item.memory).map((item) => [item.memory, item])).values()];
   const colorVariants = [...new Map(familyVariants.filter((item) => item.color).map((item) => [item.color, item])).values()];
-  const galleryItems = product.images.slice(0, 4);
+  const galleryItems = (product.images && product.images.length ? product.images : [product.image]).slice(0, 5);
+
+  // Reviews aggregate
+  let reviews = [];
+  let reviewAgg = { count: 0, avg: 0 };
+  try {
+    reviews = db.prepare("SELECT * FROM product_reviews WHERE product_id = ? AND hidden = 0 ORDER BY id DESC").all(product.id);
+    const row = db.prepare("SELECT COUNT(*) AS c, COALESCE(AVG(rating),0) AS a FROM product_reviews WHERE product_id = ? AND hidden = 0").get(product.id);
+    reviewAgg = { count: row.c, avg: Number(row.a || 0) };
+  } catch { /* table may not exist yet */ }
+  const displayRating = reviewAgg.count > 0 ? Number(reviewAgg.avg).toFixed(1) : product.rating;
+  const displayReviewCount = reviewAgg.count > 0 ? reviewAgg.count : product.reviews;
+
+  // Wishlist state
+  let inWishlist = false;
+  if (user) {
+    try {
+      const r = db.prepare("SELECT id FROM wishlists WHERE user_email=? AND product_id=?").get(user.email, product.id);
+      inWishlist = Boolean(r);
+    } catch { /* ignore */ }
+  }
+
+  // Parse specs_json into categorized rows for table
+  const specCategories = {
+    Display: [], Processor: [], Memory: [], Storage: [], Connectivity: [],
+    Battery: [], OS: [], "Box Contents": [], Dimensions: [], Warranty: [], General: []
+  };
+  const classifySpec = (s) => {
+    const t = String(s).toLowerCase();
+    if (/display|screen|inch|oled|amoled|retina|refresh/.test(t)) return "Display";
+    if (/core|ryzen|snapdragon|apple m|mediatek|processor|cpu|chip/.test(t)) return "Processor";
+    if (/ram|memory|ddr/.test(t)) return "Memory";
+    if (/ssd|hdd|storage|gb\b|tb\b/.test(t)) return "Storage";
+    if (/wifi|wi-fi|bluetooth|5g|4g|lte|usb|hdmi|connectivity/.test(t)) return "Connectivity";
+    if (/battery|mah|wh\b|hours\b|h battery/.test(t)) return "Battery";
+    if (/macos|windows|android|ios|os\b/.test(t)) return "OS";
+    if (/warranty/.test(t)) return "Warranty";
+    if (/dimen|weight|mm\b|kg\b|grams?/.test(t)) return "Dimensions";
+    if (/box|include|cable|adapter|earpod|charger/.test(t)) return "Box Contents";
+    return "General";
+  };
+  specs.forEach(s => specCategories[classifySpec(s)].push(s));
+  const specsTableRows = Object.entries(specCategories)
+    .filter(([, arr]) => arr.length)
+    .map(([cat, arr]) => `<tr><th>${escapeHtml(cat)}</th><td>${arr.map(a => escapeHtml(a)).join("<br>")}</td></tr>`)
+    .join("");
+
+  const emiMonthly = Math.round(product.price / 12);
+  const keyFeatures = specs.slice(0, 6);
 
   return layout({
-    title: `${product.name} | ElectroHub`,
-    description: product.description,
+    title: `${product.name} – MAPLE`,
+    description: String(product.description || "").slice(0, 150),
+    ogImage: product.image,
     currentPath: "/products",
     user,
     content: `
       ${CR_HIDE_LEGACY_FOOTER_STYLE}
-      <main class="cr-pdp-shell">
-        <nav class="cr-pdp-breadcrumbs">
+      <main class="cr-pdp-shell pdp2-shell">
+        <nav class="cr-pdp-breadcrumbs pdp2-crumbs">
           <a href="/">Home</a><span>/</span>
-          <a href="/products">${escapeHtml(product.category)}</a><span>/</span>
-          <a href="/category/${slugify(product.category)}">${escapeHtml(product.brand)}</a><span>/</span>
+          <a href="/category/${slugify(product.category)}">${escapeHtml(product.category)}</a><span>/</span>
           <span class="cr-current">${escapeHtml(product.name)}</span>
         </nav>
 
-        <div class="cr-pdp-top">
-          <div class="cr-pdp-gallery">
-            <div class="cr-pdp-thumbs">
+        <div class="pdp2-top">
+          <div class="pdp2-gallery">
+            <div class="pdp2-stage">
+              <img data-cr-stage src="${escapeHtml(galleryItems[0] || product.image)}" alt="${escapeHtml(product.name)}">
+            </div>
+            <div class="pdp2-thumbs">
               ${galleryItems.map((image, index) => `
-                <button class="cr-pdp-thumb ${index === 0 ? "is-active" : ""}" type="button" data-cr-thumb data-src="${escapeHtml(image)}">
+                <button class="pdp2-thumb ${index === 0 ? "is-active" : ""}" type="button" data-cr-thumb data-src="${escapeHtml(image)}">
                   <img src="${escapeHtml(image)}" alt="${escapeHtml(product.name)} ${index + 1}">
                 </button>
               `).join("")}
             </div>
-            <div class="cr-pdp-stage">
-              <img data-cr-stage src="${escapeHtml(product.image)}" alt="${escapeHtml(product.name)}">
-            </div>
           </div>
 
-          <aside class="cr-pdp-info">
-            <p class="cr-pdp-eyebrow">${escapeHtml(product.brand)}</p>
-            <h1 class="cr-pdp-title">${escapeHtml(product.name)}</h1>
-            <div class="cr-pdp-rating">
-              <span class="cr-pdp-stars">★ ${product.rating}</span>
-              <span class="cr-pdp-reviews">(${product.reviews.toLocaleString("en-IN")} reviews)</span>
+          <aside class="pdp2-info">
+            <p class="pdp2-brand">${escapeHtml(product.brand)}</p>
+            <h1 class="pdp2-title">${escapeHtml(product.name)}</h1>
+            <div class="pdp2-rating">
+              <span class="pdp2-stars">${"★".repeat(Math.round(Number(displayRating)))}${"☆".repeat(5 - Math.round(Number(displayRating)))}</span>
+              <strong>${displayRating}</strong>
+              <a href="#pdp2-reviews" class="pdp2-rev-link">${Number(displayReviewCount).toLocaleString("en-IN")} reviews</a>
             </div>
-            <div class="cr-pdp-price-row">
-              <strong class="cr-pdp-price">${currency(product.price)}</strong>
-              ${product.original_price > product.price ? `<span class="cr-pdp-strike">${currency(product.original_price)}</span>` : ""}
-              ${product.original_price > product.price ? `<span class="cr-pdp-off">${Math.round(((product.original_price - product.price)/product.original_price)*100)}% off</span>` : ""}
+            <div class="pdp2-price-row">
+              <strong class="pdp2-price">${currency(product.price)}</strong>
+              ${product.original_price > product.price ? `<span class="pdp2-strike">${currency(product.original_price)}</span>` : ""}
+              ${product.original_price > product.price ? `<span class="pdp2-off">${Math.round(((product.original_price - product.price)/product.original_price)*100)}% off</span>` : ""}
             </div>
-            <p class="cr-pdp-tax">Inclusive of all taxes · EMI from ${currency(Math.round(product.price/24))}/mo</p>
+            <p class="pdp2-emi">Inclusive of all taxes · EMI from <strong>${currency(emiMonthly)}/mo</strong></p>
 
             ${colorVariants.length ? `
-              <div class="cr-pdp-variant">
-                <span class="cr-pdp-variant-label">Colour</span>
-                <div class="cr-pdp-variant-row">
-                  ${colorVariants.map((item) => `<a class="cr-pdp-variant-pill ${item.slug === product.slug ? "is-active" : ""}" href="/product/${item.slug}">${escapeHtml(item.color)}</a>`).join("")}
+              <div class="pdp2-variant">
+                <span class="pdp2-var-label">Colour</span>
+                <div class="pdp2-var-row">
+                  ${colorVariants.map((item) => `<a class="pdp2-var-pill ${item.slug === product.slug ? "is-active" : ""}" href="/product/${item.slug}">${escapeHtml(item.color)}</a>`).join("")}
                 </div>
               </div>
             ` : ""}
 
             ${memoryVariants.length ? `
-              <div class="cr-pdp-variant">
-                <span class="cr-pdp-variant-label">Storage</span>
-                <div class="cr-pdp-variant-row">
-                  ${memoryVariants.map((item) => `<a class="cr-pdp-variant-pill ${item.slug === product.slug ? "is-active" : ""}" href="/product/${item.slug}">${escapeHtml(item.memory)}</a>`).join("")}
+              <div class="pdp2-variant">
+                <span class="pdp2-var-label">Storage</span>
+                <div class="pdp2-var-row">
+                  ${memoryVariants.map((item) => `<a class="pdp2-var-pill ${item.slug === product.slug ? "is-active" : ""}" href="/product/${item.slug}">${escapeHtml(item.memory)}</a>`).join("")}
                 </div>
               </div>
             ` : ""}
 
-            <div class="cr-pdp-pincode">
-              <span>Deliver to</span>
-              <input type="text" placeholder="Enter pincode" maxlength="6" value="400049">
+            <div class="pdp2-pincode">
+              <label>Deliver to <input type="text" placeholder="Pincode" maxlength="6" value="400049"></label>
               <button type="button">Check</button>
             </div>
-            <p class="cr-pdp-delivery">Delivery by 16 April · Free shipping above ₹499</p>
+            <p class="pdp2-delivery">Delivery by 16 April · Free shipping above ₹499</p>
 
-            <div class="cr-pdp-ctas">
-              <a class="cr-pdp-buy" href="/checkout">Buy Now</a>
-              <button class="cr-pdp-cart" data-add-to-cart='${JSON.stringify({
+            <div class="pdp2-qty">
+              <span>Quantity</span>
+              <div class="pdp2-qty-ctrl"><button type="button" data-pdp2-qty="-">−</button><span data-pdp2-qty-val>1</span><button type="button" data-pdp2-qty="+">+</button></div>
+            </div>
+
+            <div class="pdp2-ctas">
+              <button class="pdp2-cart" data-add-to-cart='${JSON.stringify({
                 id: product.id,
                 slug: product.slug,
                 name: product.name,
                 price: product.price,
                 image: product.image
               }).replace(/'/g, "&apos;")}'>Add to Cart</button>
+              <a class="pdp2-buy" href="/checkout">Buy Now</a>
+              <button class="pdp2-heart ${inWishlist ? "is-on" : ""}" type="button" data-pdp2-wish="${product.id}" aria-label="Save to wishlist">${inWishlist ? "♥" : "♡"}</button>
             </div>
 
-            <ul class="cr-pdp-perks">
-              <li>Free 7-day returns</li>
+            <ul class="pdp2-perks">
+              <li>Free 30-day returns</li>
               <li>1 year brand warranty</li>
-              <li>Secure payments</li>
+              <li>Secure payments · COD available</li>
+              <li>In the box: ${escapeHtml(product.name.split("(")[0].trim())}, User guide, Warranty card</li>
             </ul>
           </aside>
         </div>
 
-        <section class="cr-pdp-offers">
-          <h3>Bank Offers & EMI</h3>
-          <div class="cr-pdp-offers-grid">
-            <article><strong>HDFC Bank</strong><span>10% instant discount on credit cards</span></article>
-            <article><strong>No-Cost EMI</strong><span>Up to 12 months on select cards</span></article>
-            <article><strong>Exchange</strong><span>Extra ₹2,000 off on exchange</span></article>
-          </div>
+        <section class="pdp2-features">
+          <h3>Key Features</h3>
+          <ul>
+            ${keyFeatures.map(f => `<li>${escapeHtml(f)}</li>`).join("")}
+          </ul>
         </section>
 
-        <section class="cr-pdp-specs">
+        <section class="pdp2-specs">
           <h3>Specifications</h3>
-          <table class="cr-pdp-specs-table">
+          <table class="pdp2-specs-table">
             <tbody>
               <tr><th>Brand</th><td>${escapeHtml(product.brand)}</td></tr>
               <tr><th>Category</th><td>${escapeHtml(product.category)}</td></tr>
-              <tr><th>Colour</th><td>${escapeHtml(product.color || "Standard")}</td></tr>
-              <tr><th>Storage</th><td>${escapeHtml(product.memory || "—")}</td></tr>
-              <tr><th>Stock</th><td>${product.stock} units</td></tr>
-              ${specs.slice(0,6).map((spec,i) => `<tr><th>Feature ${i+1}</th><td>${escapeHtml(spec)}</td></tr>`).join("")}
+              ${specsTableRows}
+              <tr><th>In Stock</th><td>${product.stock} units</td></tr>
             </tbody>
           </table>
         </section>
 
-        <section class="cr-pdp-description">
+        <section class="pdp2-description">
           <h3>Product Description</h3>
-          <p>${escapeHtml(product.description)}</p>
+          ${String(product.description).split(/\n+/).map(p => `<p>${escapeHtml(p.trim())}</p>`).join("")}
         </section>
 
-        <section class="cr-pdp-similar">
+        <section class="pdp2-reviews" id="pdp2-reviews">
+          <h3>Customer Reviews <span class="pdp2-rev-agg">${reviewAgg.count > 0 ? Number(reviewAgg.avg).toFixed(1) + " ★ · " + reviewAgg.count + " reviews" : "No reviews yet"}</span></h3>
+          ${reviews.length ? `
+            <div class="pdp2-rev-list">
+              ${reviews.map(r => `
+                <article class="pdp2-rev-item">
+                  <header>
+                    <strong>${escapeHtml(r.user_name)}</strong>
+                    <span class="pdp2-rev-stars">${"★".repeat(r.rating)}${"☆".repeat(5 - r.rating)}</span>
+                    <span class="pdp2-rev-date">${new Date(r.created_at).toLocaleDateString("en-IN")}</span>
+                  </header>
+                  <h4>${escapeHtml(r.title)}</h4>
+                  <p>${escapeHtml(r.body)}</p>
+                </article>
+              `).join("")}
+            </div>
+          ` : `<p class="pdp2-rev-empty">Be the first to review this product.</p>`}
+
+          ${user ? `
+            <form class="pdp2-rev-form" data-pdp2-rev-form data-product-id="${product.id}">
+              <h4>Write a Review</h4>
+              <div class="pdp2-rev-stars-input" data-pdp2-stars>
+                ${[1,2,3,4,5].map(n => `<button type="button" data-star="${n}" aria-label="${n} stars">☆</button>`).join("")}
+                <input type="hidden" name="rating" value="0">
+              </div>
+              <label>Title<input name="title" maxlength="100" placeholder="Summarise your experience"></label>
+              <label>Review<textarea name="body" rows="4" minlength="20" required placeholder="At least 20 characters"></textarea></label>
+              <div class="pdp2-rev-actions">
+                <button type="submit" class="mp-primary">Submit review</button>
+                <span class="pdp2-rev-msg" data-pdp2-rev-msg></span>
+              </div>
+            </form>
+          ` : `
+            <p class="pdp2-rev-login">Please <a href="/login?next=/product/${product.slug}">log in</a> to write a review.</p>
+          `}
+        </section>
+
+        <section class="pdp2-similar">
           <h3>Similar Products</h3>
           <div class="cr-pdp-similar-rail">
             ${related.map(productCard).join("")}
           </div>
         </section>
       </main>
-      ${renderCromaFooter()}
     `
   });
 }
 
 function cartPage(user = null) {
   return layout({
-    title: "Your Cart | ElectroHub",
+    title: "Cart – MAPLE",
+    description: "Review items in your MAPLE cart before checkout. Free delivery and easy 30-day returns.",
     currentPath: "/cart",
     user,
     content: `
@@ -2734,6 +3033,12 @@ function cartPage(user = null) {
               <span>Price</span>
             </div>
             <div class="cr-cart-items-body" data-cart-items></div>
+            <div class="eh-cart-empty" data-cart-empty hidden>
+              <div class="eh-cart-empty-icon" aria-hidden="true">🛒</div>
+              <h2>Your cart is empty</h2>
+              <p>Looks like you haven't added anything yet.</p>
+              <a class="primary-button" href="/products">Browse products</a>
+            </div>
             <a class="cr-cart-continue" href="/products">← Continue shopping</a>
           </section>
 
@@ -2752,22 +3057,25 @@ function cartPage(user = null) {
           </aside>
         </div>
       </main>
-      ${renderCromaFooter()}
     `
   });
 }
 
 function checkoutPage(user = null) {
+  const rzpReady = razorpayConfigured();
   return layout({
-    title: "Checkout | ElectroHub",
+    title: "Checkout – MAPLE",
+    description: "Secure checkout with Razorpay test-mode payments, COD fallback, and instant order tracking.",
     currentPath: "/cart",
     user,
     content: `
       ${CR_HIDE_LEGACY_FOOTER_STYLE}
-      <main class="cr-co-shell">
+      <main class="cr-co-shell" data-rzp-ready="${rzpReady ? "1" : "0"}" data-rzp-key="${escapeHtml(RAZORPAY_KEY_ID || "")}">
         <header class="cr-co-header">
           <h1>Checkout</h1>
         </header>
+        ${!rzpReady ? `<div class="eh-banner eh-banner-warn" role="status">Test mode — add real Razorpay keys to .env to enable live payments.</div>` : `<div class="eh-banner eh-banner-info" role="status">Razorpay test mode is active. Use test cards only.</div>`}
+        <div class="eh-banner eh-banner-error" id="eh-pay-error" hidden role="alert"></div>
 
         <ol class="cr-co-stepper" data-cr-steps>
           <li class="is-active" data-step="1"><span>1</span>Shipping</li>
@@ -2798,13 +3106,29 @@ function checkoutPage(user = null) {
           </section>
 
           <section class="cr-co-step" data-step-body="2">
+            <h2>Verify Email</h2>
+            <div class="mp-verify-card" data-mp-verify>
+              <label>Email <input type="email" name="verifyEmail" data-mp-verify-email value="${escapeHtml(user?.email || "")}"></label>
+              <div class="mp-verify-row">
+                <button type="button" class="mp-ghost" data-mp-send-otp>Send OTP</button>
+                <input type="text" placeholder="Enter 6-digit OTP" maxlength="6" data-mp-verify-code hidden>
+                <button type="button" class="mp-primary" data-mp-verify-submit hidden>Verify</button>
+                <a href="#" class="mp-link" data-mp-change-email hidden>Change email</a>
+              </div>
+              <p class="mp-verify-status" data-mp-verify-status></p>
+            </div>
             <h2>Payment Method</h2>
-            <label class="cr-co-pay-option"><input type="radio" name="pay" value="card" checked><span>Credit / Debit Card</span></label>
-            <label class="cr-co-pay-option"><input type="radio" name="pay" value="upi"><span>UPI</span></label>
-            <label class="cr-co-pay-option"><input type="radio" name="pay" value="cod"><span>Cash on Delivery</span></label>
+            <label class="cr-co-pay-option"><input type="radio" name="pay" value="cod" checked><span>Cash on Delivery</span></label>
+            <label class="cr-co-pay-option"><input type="radio" name="pay" value="stripe"><span>Stripe (Card)</span></label>
+            <label class="cr-co-pay-option"><input type="radio" name="pay" value="paypal"><span>PayPal</span></label>
+            <label class="cr-co-pay-option"><input type="radio" name="pay" value="wise"><span>Wise (Bank Transfer)</span></label>
+            <div class="mp-wise-box" data-mp-wise hidden>
+              <p><strong>Wise bank transfer instructions</strong></p>
+              <p>Account name: MAPLE CORE INC<br>Wise email: payments@maple.com<br>Reference: your email on file</p>
+            </div>
             <div class="cr-co-actions">
               <button type="button" class="cr-co-back" data-cr-back>Back</button>
-              <button type="button" class="cr-co-next" data-cr-next>Continue to Review</button>
+              <button type="button" class="cr-co-next" data-cr-next data-mp-require-verified>Continue to Review</button>
             </div>
           </section>
 
@@ -2819,14 +3143,13 @@ function checkoutPage(user = null) {
           </section>
         </form>
       </main>
-      ${renderCromaFooter()}
     `
   });
 }
 
 function trackPage(prefill = "", user = null) {
   return layout({
-    title: "Track Order | ElectroHub",
+    title: "Track Order | MAPLE",
     currentPath: "/track",
     user,
     content: `
@@ -2890,9 +3213,12 @@ function orderSuccessPage(code, user = null) {
   });
 }
 
-function authPage({ message = "", email = "", verified = false, error = "" } = {}, user = null) {
+function authPage({ message = "", email = "", verified = false, error = "", next = "" } = {}, user = null) {
+  const nextNotice = next ? `<div class="eo-auth-banner">Please login to access your ${/checkout/i.test(next) ? "checkout" : "cart"}.</div>` : "";
+  const loginAction = next ? `/auth/login?next=${encodeURIComponent(next)}` : "/auth/login";
   return layout({
-    title: "Login | ElectroHub",
+    title: "Login – MAPLE",
+    description: "Sign in to your MAPLE account to access your cart, orders, and saved items.",
     currentPath: "/login",
     user,
     content: `
@@ -2913,10 +3239,11 @@ function authPage({ message = "", email = "", verified = false, error = "" } = {
             <div class="eo-auth-card">
               <h1 class="eo-auth-title">Login</h1>
               <p class="eo-auth-sub">Enter your email and password to access your account.</p>
+              ${nextNotice}
               ${verified ? `<div class="eo-auth-banner eo-auth-success">Signup successful — you can login now.</div>` : ""}
               ${message ? `<div class="eo-auth-banner">${escapeHtml(message)}</div>` : ""}
               ${error ? `<div class="eo-auth-banner eo-auth-error">${error}</div>` : ""}
-              <form class="eo-auth-form" method="POST" action="/auth/login">
+              <form class="eo-auth-form" method="POST" action="${loginAction}">
                 <label>Email<input type="email" name="email" value="${escapeHtml(email)}" required autocomplete="email"></label>
                 <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
                 <button class="eo-auth-btn" type="submit">Login</button>
@@ -2927,14 +3254,13 @@ function authPage({ message = "", email = "", verified = false, error = "" } = {
           </div>
         </section>
       </main>
-      ${renderCromaFooter()}
     `
   });
 }
 
 function signupPage({ message = "", error = "", name = "", email = "" } = {}, user = null) {
   return layout({
-    title: "Sign up | ElectroHub",
+    title: "Sign up | MAPLE",
     currentPath: "/signup",
     user,
     content: `
@@ -2943,7 +3269,7 @@ function signupPage({ message = "", error = "", name = "", email = "" } = {}, us
         <section class="eo-auth-split">
           <aside class="eo-auth-left eo-auth-left-alt">
             <div class="eo-auth-left-inner">
-              <h2 class="eo-auth-tag">Join ElectroHub</h2>
+              <h2 class="eo-auth-tag">Join MAPLE</h2>
               <p class="eo-auth-tag-sub">Create your free account in under a minute. Verify via email OTP and start shopping instantly.</p>
               <div class="eo-auth-illus" aria-hidden="true">
                 <span></span><span></span><span></span>
@@ -2967,14 +3293,22 @@ function signupPage({ message = "", error = "", name = "", email = "" } = {}, us
           </div>
         </section>
       </main>
-      ${renderCromaFooter()}
     `
   });
 }
 
-function signupSuccessPage(email, user = null) {
+function signupSuccessPage(email, user = null, devInfo = null, opts = {}) {
+  const isDev = devInfo && devInfo.mailResult && devInfo.mailResult.mode === "dev";
+  const error = opts.error || "";
+  const devHint = isDev ? `
+    <div style="margin-top:14px;padding:12px 14px;background:#fff8e1;border:1px solid #f7d774;border-radius:8px;color:#5b4500;font-size:13px">
+      <strong>Dev mode:</strong> SMTP not configured, so the OTP wasn't emailed. Your code is
+      <code style="display:inline-block;padding:2px 8px;background:#fff;border-radius:4px;font-size:16px;letter-spacing:3px;font-weight:700">${escapeHtml(devInfo.otp)}</code>
+    </div>
+  ` : "";
+  const errorBanner = error ? `<div class="eo-auth-banner eo-auth-error" style="margin-bottom:12px">${escapeHtml(error)}</div>` : "";
   return layout({
-    title: "Check your email | ElectroHub",
+    title: "Verify your email | MAPLE",
     currentPath: "/signup",
     user,
     content: `
@@ -2983,21 +3317,28 @@ function signupSuccessPage(email, user = null) {
         <section class="eo-auth-split">
           <div class="eo-auth-right" style="grid-column:1 / -1">
             <div class="eo-auth-card">
-              <h1 class="eo-auth-title">Check your email</h1>
-              <p class="eo-auth-sub">We've sent a verification link and OTP to <strong>${escapeHtml(email)}</strong>. Click the link in the email to verify your account, then return to login.</p>
-              <a class="eo-auth-btn" href="/login" style="display:inline-block;text-align:center;text-decoration:none">Back to login</a>
+              <h1 class="eo-auth-title">Enter verification code</h1>
+              <p class="eo-auth-sub">We sent a 6-digit OTP to <strong>${escapeHtml(email)}</strong>. Enter it below to activate your account.</p>
+              ${errorBanner}
+              <form class="eo-auth-form" method="POST" action="/auth/verify-otp" style="margin-top:14px">
+                <input type="hidden" name="email" value="${escapeHtml(email)}">
+                <label class="eo-auth-label">6-digit OTP</label>
+                <input class="eo-auth-input" type="text" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus style="letter-spacing:8px;font-size:22px;text-align:center;font-weight:700">
+                <button class="eo-auth-btn" type="submit" style="margin-top:12px">Verify & continue</button>
+              </form>
+              ${devHint}
+              <p class="eo-auth-foot" style="margin-top:16px">Didn't get the code? <a href="/auth/resend-otp?email=${encodeURIComponent(email)}">Resend OTP</a></p>
             </div>
           </div>
         </section>
       </main>
-      ${renderCromaFooter()}
     `
   });
 }
 
 function adminLoginPage({ error = "" } = {}) {
   return layout({
-    title: "Admin Login | ElectroHub",
+    title: "Admin Login | MAPLE",
     currentPath: "/admin/login",
     user: null,
     content: `
@@ -3022,38 +3363,117 @@ function adminLoginPage({ error = "" } = {}) {
 
 function accountPage(user) {
   const orders = getOrdersByEmail(user.email);
+  const memberSince = (() => {
+    try {
+      const row = db.prepare("SELECT created_at FROM users WHERE email = ?").get(user.email);
+      if (row && row.created_at) return new Date(row.created_at).toLocaleDateString("en-IN", { year:"numeric", month:"short"});
+    } catch { /* ignore */ }
+    if (orders.length) return new Date(orders[orders.length - 1].created_at).toLocaleDateString("en-IN", { year:"numeric", month:"short"});
+    return "Recently";
+  })();
+  let wishRows = [];
+  try {
+    wishRows = db.prepare(`
+      SELECT p.* FROM products p
+      INNER JOIN wishlists w ON w.product_id = p.id
+      WHERE w.user_email = ?
+      ORDER BY w.id DESC LIMIT 4
+    `).all(user.email).map(normalizeProduct);
+  } catch { wishRows = []; }
+  const addr = (globalThis.__mapleCtx && globalThis.__mapleCtx.userAddress) || null;
   return layout({
-    title: "My Account | ElectroHub",
+    title: "My Account | MAPLE",
     currentPath: "/account",
     user,
     content: `
-      <main class="section">
+      <main class="section mp-account-v2">
         <div class="section-head">
           <div>
             <p class="eyebrow">My account</p>
             <h1 class="page-title">Welcome, ${escapeHtml(user.name)}</h1>
-            <p class="subtle">${escapeHtml(user.email)} · ${user.verified ? "Verified account" : "Verification pending"}</p>
           </div>
           <form method="POST" action="/auth/logout">
             <button class="ghost-button" type="submit">Logout</button>
           </form>
         </div>
-        <div class="stats-grid">
-          <article class="stat-card"><span>Login method</span><strong>Email + OTP</strong></article>
-          <article class="stat-card"><span>Account status</span><strong>${user.verified ? "Verified" : "Pending"}</strong></article>
-          <article class="stat-card"><span>Storage backend</span><strong>${MONGODB_URI ? "MongoDB mirror" : "SQLite local"}</strong></article>
-          <article class="stat-card"><span>Orders placed</span><strong>${orders.length}</strong></article>
-        </div>
+
+        <section class="panel-card mp-acc-profile">
+          <h2>Profile</h2>
+          <div class="mp-acc-profile-grid">
+            <div><span class="mp-label">Name</span><strong>${escapeHtml(user.name)}</strong></div>
+            <div><span class="mp-label">Email</span><strong>${escapeHtml(user.email)}</strong></div>
+            <div><span class="mp-label">Member since</span><strong>${escapeHtml(memberSince)}</strong></div>
+            <div><span class="mp-label">Orders</span><strong>${orders.length}</strong></div>
+          </div>
+          <a class="mp-link" href="/login">Change password</a>
+        </section>
+
         <section class="panel-card">
-          <h2>My orders</h2>
+          <div class="mp-acc-head"><h2>Order History</h2><a class="mp-link" href="/track">Track an order</a></div>
           ${orders.length
-            ? orders.map((order) => `
-              <div class="summary-line border-row">
-                <span>${escapeHtml(order.order_code)} · ${new Date(order.created_at).toLocaleDateString("en-IN")}</span>
-                <strong>${currency(order.total)} · ${escapeHtml(order.status)}</strong>
-              </div>
-            `).join("")
+            ? `<div class="mp-acc-orders">${orders.map((order, i) => {
+                const items = (() => { try { return JSON.parse(order.items_json || "[]"); } catch { return []; } })();
+                return `
+                  <article class="mp-acc-order ${i === 0 ? "is-latest" : ""}">
+                    <header>
+                      <strong>${escapeHtml(order.order_code)}</strong>
+                      ${i === 0 ? `<span class="mp-acc-badge">Just ordered</span>` : ""}
+                      <span class="mp-acc-date">${new Date(order.created_at).toLocaleDateString("en-IN")}</span>
+                    </header>
+                    <div class="mp-acc-items">${items.slice(0,3).map(it => `<span>${escapeHtml(it.name)} × ${it.quantity}</span>`).join("")}${items.length > 3 ? `<span>+${items.length - 3} more</span>` : ""}</div>
+                    <footer>
+                      <span class="mp-acc-status">${escapeHtml(order.status)}</span>
+                      <strong>${currency(order.total)}</strong>
+                    </footer>
+                  </article>
+                `;
+              }).join("")}</div>`
             : `<div class="empty-panel">No orders yet. Start shopping to see your order history here.</div>`}
+        </section>
+
+        <section class="panel-card">
+          <h2>Appearance</h2>
+          <div class="mp-theme-grid" data-mp-theme-grid>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="snow" style="background:#0d9488" title="Snow"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="pearl" style="background:#8b7355" title="Pearl"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="cloud" style="background:#6366f1" title="Cloud"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="sand" style="background:#b08968" title="Sand"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="mint" style="background:#2dd4bf" title="Mint"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="rose" style="background:#be8c9e" title="Rose"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="ivory" style="background:#a09070" title="Ivory"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="arctic" style="background:#3b82f6" title="Arctic"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="lavender" style="background:#7c3aed" title="Lavender"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="sage" style="background:#6b8f5b" title="Sage"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="midnight" style="background:#a78bfa" title="Midnight"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="charcoal" style="background:#22d3ee" title="Charcoal"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="navy" style="background:#60a5fa" title="Navy"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="slate" style="background:#94a3b8" title="Slate"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="espresso" style="background:#c9a87c" title="Espresso"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="forest" style="background:#4ade80" title="Forest"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="plum" style="background:#c084fc" title="Plum"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="storm" style="background:#38bdf8" title="Storm"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="obsidian" style="background:#fb923c" title="Obsidian"></button>
+            <button class="mp-theme-swatch" data-mp-theme-swatch="carbon" style="background:#a3a3a3" title="Carbon"></button>
+          </div>
+        </section>
+
+        <section class="panel-card">
+          <div class="mp-acc-head"><h2>Default Address</h2><button type="button" class="mp-ghost" data-mp-addr-open>Edit</button></div>
+          ${addr && addr.pin
+            ? `<p>${escapeHtml(addr.city)}, ${escapeHtml(addr.state)} — ${escapeHtml(addr.pin)}</p>`
+            : `<p class="subtle">No address saved yet. Click Edit to add one.</p>`}
+        </section>
+
+        <section class="panel-card">
+          <div class="mp-acc-head"><h2>Wishlist</h2><a class="mp-link" href="/wishlist">View all</a></div>
+          ${wishRows.length
+            ? `<div class="mp-acc-wish-preview">${wishRows.map(p => `
+                <a href="/product/${p.slug}" class="mp-acc-wish-thumb">
+                  <img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}">
+                  <span>${escapeHtml(p.brand)}</span>
+                  <strong>${currency(p.price)}</strong>
+                </a>`).join("")}</div>`
+            : `<p class="subtle">Your wishlist is empty. <a href="/products">Discover products</a>.</p>`}
         </section>
       </main>
     `
@@ -3118,7 +3538,7 @@ function adminPage(user = null, opts = {}) {
         <table class="cr-admin-table eo-admin-products-table">
           <thead><tr><th><input type="checkbox" data-eo-check-all></th><th>Image</th><th>Name</th><th>Brand</th><th>Price</th><th>Stock</th><th>Actions</th></tr></thead>
           <tbody>
-            ${allProducts.map((product) => `
+            ${allProducts.length ? allProducts.map((product) => `
               <tr>
                 <td><input type="checkbox" name="slugs[]" value="${escapeHtml(product.slug)}" class="eo-row-check"></td>
                 <td><img src="${escapeHtml(product.image)}" alt="" class="eo-admin-thumb"></td>
@@ -3134,7 +3554,7 @@ function adminPage(user = null, opts = {}) {
                   </form>
                 </td>
               </tr>
-            `).join("")}
+            `).join("") : `<tr><td colspan="7">No records yet.</td></tr>`}
           </tbody>
         </table>
         </div>
@@ -3146,7 +3566,7 @@ function adminPage(user = null, opts = {}) {
 
     <section class="cr-admin-card" id="add-product">
       <div class="cr-admin-card-head"><h3>${editProduct ? "Edit Product" : "Add new product"}</h3></div>
-      <form class="cr-admin-form" method="POST" action="/admin/products">
+      <form class="cr-admin-form mp-admin-upload-form" method="POST" action="/admin/products/create" enctype="multipart/form-data" data-mp-add-product>
         <input type="hidden" name="existingSlug" value="${escapeHtml(editProduct?.slug || "")}">
         <label>Product name<input name="name" value="${escapeHtml(editProduct?.name || "")}" required></label>
         <div class="cr-admin-grid-2">
@@ -3169,13 +3589,23 @@ function adminPage(user = null, opts = {}) {
           <label>Stock<input name="stock" type="number" value="${escapeHtml(editProduct?.stock || "10")}" required></label>
           <label>Badge<input name="badge" value="${escapeHtml(editProduct?.badge || "New")}" required></label>
         </div>
-        <label>Description<input name="description" value="${escapeHtml(editProduct?.description || "")}" required></label>
-        <label>Images (one per line)<textarea name="images" rows="3">${escapeHtml((editProduct?.images || []).join("\n"))}</textarea></label>
+        <label>Images (primary + similar)
+          <div class="mp-drop-zone" data-mp-drop>
+            <p>Drag &amp; drop images here, click to browse, or paste from clipboard.</p>
+            <input type="file" name="images" accept="image/*" multiple data-mp-file>
+          </div>
+          <div class="mp-previews" data-mp-previews></div>
+        </label>
+        <label>Description (min. 250 words)
+          <textarea name="description" rows="8" required data-mp-desc>${escapeHtml(editProduct?.description || "")}</textarea>
+          <span class="mp-word-count" data-mp-wordcount>0 words</span>
+        </label>
         <label>Specs (one per line)<textarea name="specs" rows="3">${escapeHtml((editProduct?.specs || []).join("\n"))}</textarea></label>
         <div class="cr-admin-form-actions">
           <button class="cr-admin-primary" type="submit">${editProduct ? "Update product" : "Add product"}</button>
           ${editProduct ? `<a class="cr-admin-ghost" href="/admin?section=products">Cancel</a>` : ""}
         </div>
+        <p class="mp-form-msg" data-mp-form-msg></p>
       </form>
     </section>
   `;
@@ -3233,6 +3663,31 @@ function adminPage(user = null, opts = {}) {
   const settingsSection = `
     <section class="cr-admin-card" id="settings">
       <div class="cr-admin-card-head"><h3>Settings</h3></div>
+      <div class="mp-theme-pick">
+        <label>Theme</label>
+        <div class="mp-theme-grid" data-mp-theme-grid>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="snow" style="background:#0d9488" title="Snow"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="pearl" style="background:#8b7355" title="Pearl"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="cloud" style="background:#6366f1" title="Cloud"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="sand" style="background:#b08968" title="Sand"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="mint" style="background:#2dd4bf" title="Mint"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="rose" style="background:#be8c9e" title="Rose"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="ivory" style="background:#a09070" title="Ivory"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="arctic" style="background:#3b82f6" title="Arctic"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="lavender" style="background:#7c3aed" title="Lavender"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="sage" style="background:#6b8f5b" title="Sage"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="midnight" style="background:#a78bfa" title="Midnight"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="charcoal" style="background:#22d3ee" title="Charcoal"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="navy" style="background:#60a5fa" title="Navy"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="slate" style="background:#94a3b8" title="Slate"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="espresso" style="background:#c9a87c" title="Espresso"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="forest" style="background:#4ade80" title="Forest"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="plum" style="background:#c084fc" title="Plum"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="storm" style="background:#38bdf8" title="Storm"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="obsidian" style="background:#fb923c" title="Obsidian"></button>
+          <button class="mp-theme-swatch" data-mp-theme-swatch="carbon" style="background:#a3a3a3" title="Carbon"></button>
+        </div>
+      </div>
       <form method="POST" action="/admin/logout">
         <button class="cr-admin-danger" type="submit">Logout</button>
       </form>
@@ -3325,6 +3780,43 @@ function adminPage(user = null, opts = {}) {
     mainBody = customersSection;
   } else if (section === "settings") {
     mainBody = settingsSection;
+  } else if (section === "reviews") {
+    let allReviews = [];
+    try {
+      allReviews = db.prepare(`
+        SELECT r.*, p.name AS product_name, p.slug AS product_slug
+        FROM product_reviews r
+        LEFT JOIN products p ON p.id = r.product_id
+        ORDER BY r.id DESC
+      `).all();
+    } catch { allReviews = []; }
+    mainBody = `
+      <section class="cr-admin-card" id="reviews">
+        <div class="cr-admin-card-head"><h3>Product Reviews (${allReviews.length})</h3></div>
+        <div style="overflow-x:auto">
+        <table class="cr-admin-table">
+          <thead><tr><th>Product</th><th>Reviewer</th><th>Rating</th><th>Title</th><th>Body</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${allReviews.length ? allReviews.map(r => `
+              <tr>
+                <td>${r.product_slug ? `<a href="/product/${escapeHtml(r.product_slug)}" target="_blank">${escapeHtml(r.product_name || "#" + r.product_id)}</a>` : escapeHtml("#" + r.product_id)}</td>
+                <td>${escapeHtml(r.user_name)}<br><small>${escapeHtml(r.user_email)}</small></td>
+                <td>${"★".repeat(r.rating)}${"☆".repeat(5 - r.rating)}</td>
+                <td>${escapeHtml(r.title)}</td>
+                <td style="max-width:320px">${escapeHtml(String(r.body || "").slice(0, 220))}${(r.body || "").length > 220 ? "…" : ""}</td>
+                <td>${new Date(r.created_at).toLocaleDateString("en-IN")}</td>
+                <td>${r.hidden ? "Hidden" : "Visible"}</td>
+                <td class="cr-admin-actions-cell">
+                  ${r.hidden ? "" : `<form method="POST" action="/admin/reviews/${r.id}/hide" style="display:inline"><button class="cr-admin-ghost" type="submit">Hide</button></form>`}
+                  <form method="POST" action="/admin/reviews/${r.id}/delete" style="display:inline" onsubmit="return confirm('Delete this review?')"><button class="cr-admin-danger" type="submit">Delete</button></form>
+                </td>
+              </tr>
+            `).join("") : `<tr><td colspan="8">No reviews yet.</td></tr>`}
+          </tbody>
+        </table>
+        </div>
+      </section>
+    `;
   } else {
     mainBody = dashboardSection;
   }
@@ -3333,19 +3825,21 @@ function adminPage(user = null, opts = {}) {
     `<a class="${section === id && !searchResults ? "is-active" : ""}" href="${href}">${label}</a>`;
 
   return layout({
-    title: "Admin | ElectroHub",
+    title: "Admin Dashboard – MAPLE",
+    description: "MAPLE admin dashboard — manage products, orders, customers, and users.",
     currentPath: "/admin",
     user,
     content: `
       ${CR_HIDE_LEGACY_FOOTER_STYLE}
       <main class="cr-admin-shell">
         <aside class="cr-admin-sidebar" data-cr-admin-sidebar>
-          <div class="cr-admin-logo">ElectroHub <span>Admin</span></div>
+          <div class="cr-admin-logo">MAPLE <span>Admin</span></div>
           <nav class="cr-admin-nav">
             ${navItem("/admin?section=dashboard", "Dashboard", "dashboard")}
             ${navItem("/admin?section=products", "Products", "products")}
             ${navItem("/admin?section=orders", "Orders", "orders")}
             ${navItem("/admin?section=customers", "Customers", "customers")}
+            ${navItem("/admin?section=reviews", "Reviews", "reviews")}
             ${navItem("/admin?section=settings", "Settings", "settings")}
           </nav>
         </aside>
@@ -3365,7 +3859,342 @@ function adminPage(user = null, opts = {}) {
           ${mainBody}
         </div>
       </main>
-      ${renderCromaFooter()}
+    `
+  });
+}
+
+function aboutPage(user = null) {
+  return layout({
+    title: "About Maple",
+    description: "About MAPLE — India's modern electronics destination.",
+    currentPath: "/about",
+    user,
+    content: `
+      <main class="mp-page mp-about-v2">
+        <section class="mp-about-grid">
+          <div class="mp-about-col-text">
+            <span class="mp-eyebrow">About Maple</span>
+            <h1>Technology, made human.</h1>
+            <p class="mp-about-lede">Maple is an electronics store built for the modern Indian shopper — curated, honest, and genuinely helpful. We exist so you can spend less time decoding spec sheets and more time loving what you bought.</p>
+
+            <h2>Our story</h2>
+            <p>Maple began in 2018 with a simple frustration: buying electronics shouldn't feel like decoding a spec sheet. Our founder, Ishika, was helping her younger sister pick a laptop for engineering college. Every site repeated the same specs — 15.6" FHD, 8GB DDR4, 512GB SSD — and none answered the one question she actually had: "Will this still feel fast two years from now?"</p>
+            <p>That evening, over chai in Koramangala, the idea for Maple took shape on a paper napkin. What if buying a laptop could feel as clear as buying a pair of running shoes — where the store helps you understand fit, purpose, and trade-offs before you look at the price?</p>
+            <p>Our first product wasn't a laptop. It was a comparison page: twelve models, three use cases, and an honest verdict for each. We shared it in three WhatsApp groups. Within a month, strangers were forwarding it. Within a quarter, customers asked us to sell the products ourselves. By 2023 we'd rebuilt the whole stack on a single thesis: every page on Maple should feel like it was designed by someone who actually shops here.</p>
+
+            <h2>Our mission</h2>
+            <p>To make great technology simple to choose and delightful to own. Every product we list is verified, every price we publish is honest, and every support conversation is handled by real humans who know the catalogue.</p>
+
+            <h2>What we stand for</h2>
+            <ul class="mp-about-list">
+              <li><strong>Genuine only.</strong> We source directly from brands and authorised distributors — zero grey-market stock.</li>
+              <li><strong>Transparent pricing.</strong> One price, clearly shown, with no last-minute surprises at checkout.</li>
+              <li><strong>Real support.</strong> Our team picks up the phone, replies to email, and resolves 92% of queries on first contact.</li>
+              <li><strong>Fast, trackable delivery.</strong> Eighteen thousand pincodes and counting — most metros in 24–48 hours.</li>
+            </ul>
+          </div>
+          <div class="mp-about-col-media">
+            <img src="/public/assets/products-v3/laptops/laptops-05.jpg" alt="Laptop lifestyle">
+            <img src="/public/assets/products-v3/mobiles/mobiles-05.jpg" alt="Mobile lifestyle">
+            <img src="/public/assets/products-v3/headphones/headphones-05.jpg" alt="Headphones lifestyle">
+          </div>
+        </section>
+      </main>
+    `
+  });
+}
+
+function termsPage(user = null) {
+  return layout({
+    title: "Terms & Conditions | MAPLE",
+    description: "MAPLE terms and conditions governing use of our website and services.",
+    currentPath: "/terms",
+    user,
+    content: `
+      <main class="mp-page">
+        <section class="mp-page-hero"><h1>Terms &amp; Conditions</h1><p>Last updated: April 2026. Please read these terms carefully before using MAPLE.</p></section>
+        <section class="mp-prose">
+          <h2>1. Acceptance of Terms</h2>
+          <p>By accessing or using the MAPLE website, mobile interfaces, or any services we provide (collectively, "the Services"), you agree to be bound by these Terms &amp; Conditions and our Privacy Policy. If you do not accept these terms in full, please do not use the Services. We may update these terms from time to time; continued use after a change constitutes acceptance of the revised terms.</p>
+          <h2>2. Eligibility</h2>
+          <p>You must be at least 18 years of age and capable of forming a legally binding contract under Indian law to register an account and place orders. By using MAPLE you represent that the information you provide is accurate and that you are purchasing for personal, non-commercial use unless otherwise agreed in writing.</p>
+          <h2>3. Account</h2>
+          <p>You are responsible for maintaining the confidentiality of your login credentials and for all activities that occur under your account. Notify us immediately at support@maple.com if you suspect unauthorised access. We reserve the right to suspend or terminate accounts that appear to engage in fraud, resale, or abusive behaviour.</p>
+          <h2>4. Orders &amp; Pricing</h2>
+          <p>All orders are offers to buy, accepted by MAPLE only upon dispatch. We strive for accuracy in listings, but typographical errors in price or availability may occasionally occur; in such cases we reserve the right to cancel the order and issue a full refund. Prices are in Indian Rupees and inclusive of applicable GST unless stated otherwise.</p>
+          <h2>5. Shipping</h2>
+          <p>We deliver to eligible pincodes across India through trusted logistics partners. Estimated delivery windows are indicative and may be affected by weather, local restrictions, or courier capacity. Risk passes to you upon delivery; please inspect parcels before signing where possible.</p>
+          <h2>6. Returns</h2>
+          <p>Eligible products may be returned within 30 days of delivery in unused, original condition with all accessories and packaging. Certain categories — opened software, hygiene-sensitive earbuds, and customised items — are excluded. Refer to our Refund &amp; Returns policy for full details.</p>
+          <h2>7. Intellectual Property</h2>
+          <p>All text, graphics, logos, product imagery, and software on MAPLE are owned by or licensed to MAPLE Core Inc. and protected under Indian and international copyright and trademark law. You may not reproduce, scrape, or redistribute any part of the Services without our prior written consent.</p>
+          <h2>8. Limitation of Liability</h2>
+          <p>To the maximum extent permitted by law, MAPLE's aggregate liability arising out of or relating to the Services shall not exceed the amount paid by you for the specific order in question. We disclaim liability for indirect, incidental, or consequential damages, including loss of data or profits, except where such limitation is prohibited by law.</p>
+          <h2>9. Governing Law</h2>
+          <p>These terms are governed by the laws of the Republic of India. Any dispute shall be subject to the exclusive jurisdiction of the competent courts at Bengaluru, Karnataka. Where permitted, parties agree to attempt good-faith mediation before initiating litigation.</p>
+          <h2>10. Contact</h2>
+          <p>Questions about these terms? Write to <a href="mailto:admin@MapleCoreInc.com">admin@MapleCoreInc.com</a> or <a href="mailto:support@maple.com">support@maple.com</a>.</p>
+        </section>
+      </main>
+    `
+  });
+}
+
+function privacyPage(user = null) {
+  return layout({
+    title: "Privacy Policy | MAPLE",
+    description: "How MAPLE collects, uses and protects your personal data.",
+    currentPath: "/privacy",
+    user,
+    content: `
+      <main class="mp-page">
+        <section class="mp-page-hero"><h1>Privacy Policy</h1><p>Your data, handled with the same care you'd want for your own.</p></section>
+        <section class="mp-prose">
+          <h2>Data we collect</h2>
+          <p>To operate the Services, we collect information you provide directly — name, email, phone, shipping address, and order history — along with limited device and browsing information such as IP address, session identifiers, and referrer URLs. Payment card data is handled entirely by our PCI-compliant payment processor; MAPLE never stores full card numbers on our servers.</p>
+          <h2>How we use it</h2>
+          <p>We use your data to fulfil and ship orders, provide customer support, send transactional messages (order confirmations, delivery updates, OTPs), personalise recommendations, detect fraud, and improve our catalogue and website. We do not sell personal data.</p>
+          <h2>Cookies</h2>
+          <p>MAPLE uses first-party cookies for authentication, cart persistence, and theme preferences. Optional analytics cookies help us understand aggregate usage patterns. You can clear or block cookies through your browser at any time, though some site features may not work as expected.</p>
+          <h2>Third-party sharing</h2>
+          <p>We share data with a limited set of vetted processors — payment gateways, logistics partners, email/SMS providers, and cloud hosting — strictly to deliver the service you requested. Each processor operates under a data-processing agreement and may only use the data for the purposes we specify.</p>
+          <h2>Security</h2>
+          <p>All data in transit is encrypted via TLS. Passwords are stored as salted hashes and never in plain text. We restrict internal access to personal data on a strict need-to-know basis and log administrative actions for audit. Despite our best efforts, no online service is 100% secure; we urge you to choose strong, unique passwords.</p>
+          <h2>Data retention</h2>
+          <p>We retain order and invoice records for the period required by Indian tax and consumer-protection law (typically seven years). Accounts inactive for more than three years may be archived or deleted on request.</p>
+          <h2>User rights</h2>
+          <p>You may request a copy of your personal data, correct inaccuracies, port your data to another service, or ask us to delete your account. Email <a href="mailto:support@maple.com">support@maple.com</a> and we will respond within 30 days.</p>
+          <h2>Children</h2>
+          <p>MAPLE's services are not directed at children under 13, and we do not knowingly collect data from them. If a parent or guardian believes a child has provided data, please contact us for prompt deletion.</p>
+          <h2>Changes</h2>
+          <p>We may update this policy to reflect new features, legal requirements, or best practice. Material changes will be announced on the homepage and by email to registered users at least 14 days before they take effect.</p>
+          <h2>Contact</h2>
+          <p>Data Protection Officer: <a href="mailto:admin@MapleCoreInc.com">admin@MapleCoreInc.com</a>. General queries: <a href="mailto:support@maple.com">support@maple.com</a>.</p>
+        </section>
+      </main>
+    `
+  });
+}
+
+function disclaimerPage(user = null) {
+  return layout({
+    title: "Disclaimer | MAPLE",
+    description: "Disclaimer regarding product information, pricing and third-party links on MAPLE.",
+    currentPath: "/disclaimer",
+    user,
+    content: `
+      <main class="mp-page">
+        <section class="mp-page-hero"><h1>Disclaimer</h1><p>Important notes about the information shown on MAPLE.</p></section>
+        <section class="mp-prose">
+          <h2>Product information</h2>
+          <p>Product descriptions, images, specifications, and feature lists on MAPLE are compiled from manufacturer data sheets, official press materials, and our editorial team. While we take reasonable steps to keep listings accurate and current, manufacturers occasionally revise specifications, ship region-specific variants, or change what's included in the retail box without notice. For binding specifications always refer to the official brand website and the physical product packaging.</p>
+          <h2>Pricing accuracy</h2>
+          <p>We strive to display correct prices at all times. However, in the rare event of a typographical error, pricing-engine glitch, or currency-conversion mismatch, MAPLE reserves the right to cancel or refuse any order placed at the incorrect price, even after order confirmation, and to refund any amount already charged in full.</p>
+          <h2>Third-party links</h2>
+          <p>The website may contain links to third-party websites — for example, brand manuals, warranty portals, or payment gateways. MAPLE does not control and is not responsible for the content, privacy practices, or availability of external sites, and the presence of a link does not constitute endorsement. You access third-party sites at your own risk.</p>
+          <h2>No medical or professional advice</h2>
+          <p>Certain products sold on MAPLE — including wearables, fitness bands, and health-tracking devices — may display information related to heart rate, blood oxygen, sleep, or similar metrics. Such output is for general wellness reference only and is not a substitute for professional medical advice, diagnosis, or treatment. Always consult a qualified medical practitioner before acting on any reading.</p>
+          <h2>Warranty pass-through</h2>
+          <p>Unless explicitly stated, all manufacturer warranties and after-sales services are provided by the respective brand's authorised service network, not by MAPLE. We assist with claims through our customer-support team, but the terms, duration, and inclusions of any warranty are those published by the manufacturer. Retain your tax invoice and original packaging to ease warranty claims.</p>
+          <h2>Colour &amp; imagery</h2>
+          <p>Product photographs on MAPLE are representative. Actual finish, shade, and packaging may vary slightly due to lighting, screen calibration, or running changes from the manufacturer.</p>
+          <h2>Contact</h2>
+          <p>Questions or discrepancies? Email <a href="mailto:support@maple.com">support@maple.com</a> and we'll investigate promptly.</p>
+        </section>
+      </main>
+    `
+  });
+}
+
+function refundPage(user = null) {
+  return layout({
+    title: "Refund & Returns | MAPLE",
+    description: "Maple's refund, returns, and exchange policy.",
+    currentPath: "/refund",
+    user,
+    content: `
+      <main class="mp-page">
+        <section class="mp-page-hero"><h1>Refund &amp; Returns</h1><p>Simple, fair, and 30 days long.</p></section>
+        <section class="mp-prose">
+          <h2>30-day return window</h2>
+          <p>You can return most items purchased on MAPLE within 30 days of delivery. The clock starts the day your order is marked "Delivered" by the courier. Requests raised after 30 days are handled case-by-case and may be declined.</p>
+          <h2>Eligible items</h2>
+          <p>Items are eligible for return when they are unused, in original condition, with all accessories, manuals, free gifts, and retail packaging intact. Activation of a device does not automatically make it ineligible — but missing packaging, damage to the seal, or missing inbox contents may reduce the refund value.</p>
+          <h2>Ineligible items</h2>
+          <p>The following cannot be returned for hygiene, safety, or manufacturer-policy reasons: in-ear headphones and earbuds where the seal has been broken, pre-installed or activated software licences, customised or personalised products, screen protectors once peeled, and items marked "non-returnable" on the product page.</p>
+          <h2>How to start a return</h2>
+          <p>Sign in, open <em>Account → Order History</em>, select the item, choose "Return" and pick a reason. A reverse-pickup will be scheduled for your address within 24–72 hours. If self-ship is preferred for a remote pincode, we'll cover the shipping cost up to ₹200 on approval.</p>
+          <h2>Refund timelines</h2>
+          <p>Once we receive the item at our warehouse and it clears quality check (typically 48 hours), refunds are issued within 5–7 business days. The amount is returned to the original payment method — card, UPI, net-banking, or wallet. COD orders are refunded via bank transfer after we collect your account details through a secure form.</p>
+          <h2>Exchanges</h2>
+          <p>If you prefer a replacement (e.g., wrong colour or size), choose "Exchange" in the return flow. We'll ship the new unit as soon as the original is picked up and clears inspection. Exchanges are subject to stock availability; if the variant you want is sold out, we'll convert the request to a refund automatically.</p>
+          <h2>Damaged or defective on arrival</h2>
+          <p>If an item arrives damaged, defective, or doesn't match the listing, tell us within 72 hours of delivery with photos of the box and the product. We'll arrange a priority replacement or full refund — including any return shipping — at no cost to you.</p>
+          <h2>Contact</h2>
+          <p>Need help? Email <a href="mailto:support@maple.com">support@maple.com</a> with your order reference and we'll take it from there.</p>
+        </section>
+      </main>
+    `
+  });
+}
+
+function wishlistPage(user) {
+  let rows = [];
+  try {
+    rows = db.prepare(`
+      SELECT p.* FROM products p
+      INNER JOIN wishlists w ON w.product_id = p.id
+      WHERE w.user_email = ?
+      ORDER BY w.id DESC
+    `).all(user.email).map(normalizeProduct);
+  } catch { rows = []; }
+  return layout({
+    title: "My Wishlist | MAPLE",
+    description: "Your saved wishlist products on MAPLE.",
+    currentPath: "/wishlist",
+    user,
+    content: `
+      <main class="mp-page mp-wishlist-page">
+        <section class="mp-page-hero"><h1>My Wishlist</h1><p>${rows.length} saved item${rows.length === 1 ? "" : "s"}</p></section>
+        ${rows.length ? `
+          <div class="mp-wish-grid">
+            ${rows.map(p => `
+              <article class="mp-wish-card">
+                <a href="/product/${p.slug}"><img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}"></a>
+                <div class="mp-wish-body">
+                  <span class="mp-wish-brand">${escapeHtml(p.brand)}</span>
+                  <h3><a href="/product/${p.slug}">${escapeHtml(p.name)}</a></h3>
+                  <div class="mp-wish-price">${currency(p.price)}</div>
+                  <div class="mp-wish-actions">
+                    <button type="button" class="mp-ghost" data-mp-wish-remove="${p.id}">Remove</button>
+                    <a class="mp-primary" href="/product/${p.slug}">Buy now</a>
+                  </div>
+                </div>
+              </article>
+            `).join("")}
+          </div>
+        ` : `
+          <div class="empty-panel mp-wish-empty">
+            <h2>Your wishlist is empty</h2>
+            <p>Save products you love so you can find them later.</p>
+            <a class="mp-primary" href="/products">Discover products</a>
+          </div>
+        `}
+      </main>
+    `
+  });
+}
+
+function storyPage(user = null) {
+  return layout({
+    title: "Maple Story",
+    description: "The story behind MAPLE.",
+    currentPath: "/story",
+    user,
+    content: `
+      <main class="mp-page">
+        <section class="mp-page-hero mp-story-hero"><h1>Our Story</h1><p>Why we started Maple, and where we're going next.</p></section>
+        <section class="mp-prose mp-story-prose">
+          <h2>It started with a frustration</h2>
+          <p>Maple began in 2018 with a simple frustration: buying electronics shouldn't feel like decoding a spec sheet. Our founder, Ishika, was trying to pick out a laptop for her younger sister heading into engineering college. Every site told her the same thing — a 15.6" FHD IPS display, 8GB DDR4, 512GB NVMe SSD — and absolutely none of it answered the one question she actually had: "Will this laptop still feel fast two years from now?"</p>
+          <p>That evening, over chai at a small kiosk in Koramangala, the idea for Maple took shape on the back of a paper napkin. What if buying a laptop could feel as clear as buying a pair of running shoes — where the store helps you understand fit, purpose, and trade-offs before you even look at the price?</p>
+          <blockquote>"We didn't want to build another marketplace. We wanted to build a store where a 19-year-old and her 60-year-old grandfather could both walk away confident in what they just bought."</blockquote>
+          <h2>Our first product</h2>
+          <p>Our first product wasn't a laptop. It was a curated comparison page. Twelve laptops, three use cases, and a single honest verdict for each. We put it up on a free domain and shared the link in three WhatsApp groups. Within a week, people we'd never met were forwarding it to their friends. Within a month, manufacturers started asking to be listed. Within a quarter, we had our first paying customers asking if we'd just sell the thing to them directly.</p>
+          <h2>Growing pains</h2>
+          <p>The next two years were exactly as messy as every founder story claims. We onboarded the wrong inventory partner and lost six weeks of Diwali sales. We launched a mobile app that crashed on half of our users' phones and had to rewrite it from scratch. We hired too fast in 2021, then had to have the hardest conversations of our careers in early 2022. Each of those moments taught us something we couldn't have learned any other way: that honesty scales further than hustle, that slow software kills trust faster than high prices, and that the quality of a team matters far more than its size.</p>
+          <p>By 2023 we'd rebuilt the entire stack on a single thesis: every experience on Maple — the homepage, the product page, the checkout, the support chat — should feel like it was designed by someone who actually shops here.</p>
+          <h2>Today</h2>
+          <p>Today, Maple serves customers across all twenty-eight states and eight union territories. We list over ten thousand products across laptops, mobiles, headphones, wearables and accessories. Our editorial team publishes weekly buying guides, our support team resolves over 92% of queries on first contact, and our logistics partners deliver to more than 18,000 pincodes. None of those numbers are what we're proudest of — we're proudest of the handwritten notes our customers send us, and the fact that nearly seven out of ten Maple customers come back within twelve months.</p>
+          <h2>Where we're going</h2>
+          <p>Our vision for the next five years is ambitious and, we think, worth the work. We want Maple to be the store that Indian families turn to first — not because we're the cheapest or the flashiest, but because we're the most trustworthy. We're investing heavily in three areas: deeper editorial content so buyers have a real guide, not just a filter; better after-sales service including in-home setup and repair; and a small but growing lineup of Maple-designed accessories built specifically for how Indians actually use technology every day.</p>
+          <p>We know we won't get everything right. But we'll keep doing the thing that got us here — listening to our customers, telling the truth about what we sell, and earning trust one order at a time.</p>
+        </section>
+      </main>
+    `
+  });
+}
+
+function storeLocatorPage(user = null) {
+  return layout({
+    title: "Store Locator | Maple",
+    currentPath: "/store-locator",
+    user,
+    content: `
+      <main class="mp-page">
+        <section class="mp-page-hero"><h1>Store Locator</h1><p>Find a Maple store near you.</p></section>
+        <section class="mp-store-grid">
+          <article class="mp-store-card">
+            <h3>Maple Bengaluru Flagship</h3>
+            <p>101, Residency Road, Bengaluru, Karnataka 560025</p>
+            <p><strong>Hours:</strong> Mon–Sun, 10:00 AM – 9:30 PM</p>
+            <p><strong>Phone:</strong> <a href="tel:+919999999999">+91 9999999999</a></p>
+          </article>
+          <iframe src="https://www.google.com/maps?q=Bangalore&output=embed" width="100%" height="400" style="border:0;border-radius:16px" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Maple Bengaluru"></iframe>
+        </section>
+      </main>
+    `
+  });
+}
+
+function contactPage(user = null) {
+  return layout({
+    title: "Contact Us | Maple",
+    currentPath: "/contact",
+    user,
+    content: `
+      <main class="mp-page mp-contact">
+        <div class="mp-contact-grid">
+          <section class="mp-contact-left">
+            <h1>Talk to Maple</h1>
+            <p>We respond within a few hours on weekdays.</p>
+            <p><strong>Email:</strong> <a href="mailto:support@maple.com">support@maple.com</a></p>
+            <p><strong>Phone:</strong> <a href="tel:+919999999999">+91 9999999999</a></p>
+            <iframe src="https://www.google.com/maps?q=Bangalore&output=embed" width="100%" height="260" style="border:0;border-radius:14px;margin-top:16px" loading="lazy" title="Maple HQ"></iframe>
+          </section>
+          <section class="mp-contact-right">
+            <form class="mp-contact-form" data-mp-contact-form>
+              <h3>Send us a message</h3>
+              <label>Name<input name="name" required></label>
+              <label>Email<input type="email" name="email" required></label>
+              <label>Phone<input name="phone"></label>
+              <label>Subject<input name="subject" required></label>
+              <label>Message<textarea name="message" rows="5" required></textarea></label>
+              <div class="mp-contact-actions">
+                <button type="submit" class="mp-primary">Send message</button>
+                <button type="button" class="mp-ghost" data-mp-support-call>Talk to us / Setup a call</button>
+              </div>
+              <p class="mp-contact-msg" data-mp-contact-msg></p>
+            </form>
+          </section>
+        </div>
+      </main>
+    `
+  });
+}
+
+function servicesPage(user = null) {
+  const services = [
+    { t: "Repair", d: "Authorised repair for major brands with transparent quotes and genuine parts across laptops, mobiles and audio." },
+    { t: "Trade-in", d: "Exchange your old device for Maple credit instantly — free pickup and fair valuations." },
+    { t: "EMI Help", d: "Find the right EMI plan — bank cards, cardless, and no-cost EMI on eligible products across price bands." }
+  ];
+  return layout({
+    title: "Services | Maple",
+    currentPath: "/services",
+    user,
+    content: `
+      <main class="mp-page">
+        <section class="mp-page-hero"><h1>Maple Services</h1><p>End-to-end support before and after your purchase.</p></section>
+        <section class="mp-services-grid">
+          ${services.map(s => `<article class="mp-service-card"><h3>${escapeHtml(s.t)}</h3><p>${escapeHtml(s.d)}</p></article>`).join("")}
+        </section>
+        <section class="mp-prose">
+          <h3>Need to reach us?</h3>
+          <p>Admin: <a href="mailto:admin@MapleCoreInc.com">admin@MapleCoreInc.com</a></p>
+          <p>Support: <a href="mailto:support@maple.com">support@maple.com</a></p>
+        </section>
+      </main>
     `
   });
 }
@@ -3426,10 +4255,65 @@ function parseFormEncoded(raw) {
   return Object.fromEntries(params.entries());
 }
 
+function readRawBuffer(req, limit = 50 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (c) => {
+      chunks.push(c);
+      size += c.length;
+      if (size > limit) reject(new Error("Payload too large"));
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+function parseMultipart(buf, boundary) {
+  const fields = {};
+  const files = [];
+  const boundaryBuf = Buffer.from("--" + boundary);
+  let start = buf.indexOf(boundaryBuf);
+  if (start < 0) return { fields, files };
+  start += boundaryBuf.length;
+  while (start < buf.length) {
+    if (buf[start] === 0x2d && buf[start + 1] === 0x2d) break; // --
+    // skip CRLF
+    if (buf[start] === 0x0d && buf[start + 1] === 0x0a) start += 2;
+    const headerEnd = buf.indexOf("\r\n\r\n", start);
+    if (headerEnd < 0) break;
+    const headerStr = buf.slice(start, headerEnd).toString("utf8");
+    const contentStart = headerEnd + 4;
+    const nextBoundary = buf.indexOf(boundaryBuf, contentStart);
+    if (nextBoundary < 0) break;
+    const contentEnd = nextBoundary - 2; // strip CRLF before boundary
+    const nameMatch = headerStr.match(/name="([^"]+)"/);
+    const filenameMatch = headerStr.match(/filename="([^"]*)"/);
+    const ctMatch = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
+    const name = nameMatch ? nameMatch[1] : "";
+    const content = buf.slice(contentStart, contentEnd);
+    if (filenameMatch && filenameMatch[1]) {
+      files.push({ field: name, filename: filenameMatch[1], contentType: ctMatch ? ctMatch[1].trim() : "application/octet-stream", data: content });
+    } else {
+      fields[name] = content.toString("utf8");
+    }
+    start = nextBoundary + boundaryBuf.length;
+  }
+  return { fields, files };
+}
+
+const UPLOADS_DIR = path.join(PUBLIC_DIR, "assets", "uploads");
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+function countWords(s) {
+  return String(s || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = decodeURIComponent(url.pathname);
   const currentUser = await getCurrentUser(req);
+  globalThis.__mapleCtx = getRequestContext(req);
 
   if (pathname.startsWith("/public/")) {
     serveStatic(res, path.join(PUBLIC_DIR, pathname.replace("/public/", "")));
@@ -3459,11 +4343,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && pathname === "/cart") {
+    if (!currentUser) {
+      res.writeHead(302, { Location: "/login?next=" + encodeURIComponent(pathname) });
+      res.end();
+      return;
+    }
     html(res, 200, cartPage(currentUser));
     return;
   }
 
   if (req.method === "GET" && pathname === "/checkout") {
+    if (!currentUser) {
+      res.writeHead(302, { Location: "/login?next=" + encodeURIComponent(pathname) });
+      res.end();
+      return;
+    }
     html(res, 200, checkoutPage(currentUser));
     return;
   }
@@ -3567,7 +4461,8 @@ const server = http.createServer(async (req, res) => {
       message: url.searchParams.get("message") || "",
       email: url.searchParams.get("email") || "",
       verified: url.searchParams.get("verified") === "1",
-      error: url.searchParams.get("error") || ""
+      error: url.searchParams.get("error") || "",
+      next: url.searchParams.get("next") || ""
     }, currentUser));
     return;
   }
@@ -3602,9 +4497,13 @@ const server = http.createServer(async (req, res) => {
     const otp = String(Math.floor(100000 + Math.random() * 900000));
     const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
     await dataLayer.saveOtp({ email, code: otp, purpose: "register", expiresAt });
-    try { await sendOtpEmail(email, otp); } catch (_e) { /* ignore mailer errors in dev */ }
-    console.log(`[signup] OTP for ${email}: ${otp} - verify link: /auth/verify?email=${encodeURIComponent(email)}&token=${otp}`);
-    html(res, 200, signupSuccessPage(email, currentUser));
+    const host = req.headers.host || "localhost:3000";
+    const proto = req.headers["x-forwarded-proto"] || "http";
+    const verifyLink = `${proto}://${host}/auth/verify?email=${encodeURIComponent(email)}&token=${otp}`;
+    let mailResult = { sent: false, mode: "dev" };
+    try { mailResult = await sendOtpEmail(email, otp, verifyLink); } catch (e) { console.warn("[signup] mailer error:", e.message); }
+    console.log(`[signup] OTP for ${email}: ${otp} — verify link: ${verifyLink}`);
+    html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp, verifyLink }));
     return;
   }
 
@@ -3632,25 +4531,31 @@ const server = http.createServer(async (req, res) => {
     const body = parseFormEncoded(await readBody(req));
     const email = String(body.email || "").trim().toLowerCase();
     const password = String(body.password || "");
+    const nextParam = String(url.searchParams.get("next") || body.next || "").trim();
+    const safeNext = nextParam.startsWith("/") && !nextParam.startsWith("//") ? nextParam : "";
+    const nextQS = safeNext ? `&next=${encodeURIComponent(safeNext)}` : "";
     if (!email || !password) {
-      res.writeHead(302, { Location: `/login?error=${encodeURIComponent("Please enter email and password.")}` });
+      res.writeHead(302, { Location: `/login?error=${encodeURIComponent("Please enter email and password.")}${nextQS}` });
       res.end();
       return;
     }
     const user = await dataLayer.getUserByEmail(email);
     if (!user) {
-      res.writeHead(302, { Location: `/login?error=${encodeURIComponent("Account not found. Please sign up first.")}&email=${encodeURIComponent(email)}` });
+      res.writeHead(302, { Location: `/login?error=${encodeURIComponent("Account not found. Please sign up first.")}&email=${encodeURIComponent(email)}${nextQS}` });
       res.end();
       return;
     }
     if (!verifyPassword(password, user.password_hash)) {
-      res.writeHead(302, { Location: `/login?error=${encodeURIComponent("Incorrect password.")}&email=${encodeURIComponent(email)}` });
+      res.writeHead(302, { Location: `/login?error=${encodeURIComponent("Incorrect password.")}&email=${encodeURIComponent(email)}${nextQS}` });
       res.end();
       return;
     }
     const session = await dataLayer.createSession(email);
     setSessionCookie(res, session.token, session.expiresAt);
-    res.writeHead(302, { Location: "/account" });
+    const hasAddr = Boolean((parseCookies(req) || {}).mp_addr);
+    let dest = safeNext || "/account";
+    if (!hasAddr) dest += (dest.indexOf("?") === -1 ? "?" : "&") + "prompt_addr=1";
+    res.writeHead(302, { Location: dest });
     res.end();
     return;
   }
@@ -3688,6 +4593,11 @@ const server = http.createServer(async (req, res) => {
           return;
         }
       }
+      // Email verification gate
+      const cookies = parseCookies(req);
+      const sessTok = cookies.session_token || "guest-" + (req.headers["x-forwarded-for"] || "anon");
+      const verified = db.prepare("SELECT * FROM checkout_email_otps WHERE session_token = ? AND email = ? AND verified = 1 ORDER BY id DESC LIMIT 1").get(sessTok, String(payload.email).toLowerCase());
+      if (!verified) { json(res, 400, { error: "Email not verified. Please verify your email before placing the order." }); return; }
 
       const items = payload.items.map((item) => {
         const product = db.prepare("SELECT id, name, price, stock FROM products WHERE id = ?").get(item.id);
@@ -3732,6 +4642,131 @@ const server = http.createServer(async (req, res) => {
       return;
     } catch (error) {
       json(res, 400, { error: error.message || "Could not create order" });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/payment/create-order") {
+    try {
+      const raw = await readBody(req);
+      const payload = JSON.parse(raw || "{}");
+      const amount = Math.max(1, Number(payload.amount || 0));
+      if (!amount) {
+        json(res, 400, { error: "Invalid amount" });
+        return;
+      }
+      if (!razorpayConfigured()) {
+        json(res, 503, { error: "Razorpay not configured", fallback: "cod" });
+        return;
+      }
+      const order = await createRazorpayOrder(amount);
+      json(res, 200, {
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        keyId: RAZORPAY_KEY_ID
+      });
+      return;
+    } catch (error) {
+      json(res, 502, { error: error.message || "Razorpay order creation failed" });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/payment/verify") {
+    try {
+      const raw = await readBody(req);
+      const payload = JSON.parse(raw || "{}");
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order } = payload;
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        json(res, 400, { error: "Missing Razorpay fields" });
+        return;
+      }
+      if (!verifyRazorpaySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
+        json(res, 400, { error: "Signature verification failed" });
+        return;
+      }
+      // Signature OK — create order in DB using provided shipping payload
+      const o = order || {};
+      const required = ["customerName", "email", "phone", "address", "city", "state", "pincode", "items"];
+      for (const key of required) {
+        if (!o[key] || (Array.isArray(o[key]) && o[key].length === 0)) {
+          json(res, 400, { error: `Missing ${key}` });
+          return;
+        }
+      }
+      const items = o.items.map((item) => {
+        const product = db.prepare("SELECT id, name, price, stock FROM products WHERE id = ?").get(item.id);
+        if (!product) throw new Error(`Product ${item.id} not found`);
+        const quantity = Math.max(1, Number(item.quantity || 1));
+        if (quantity > product.stock) throw new Error(`Only ${product.stock} units left for ${product.name}`);
+        return { id: product.id, name: product.name, price: product.price, quantity };
+      });
+      const total = items.reduce((s, i) => s + i.price * i.quantity, 0);
+      const orderCode = `ORD-${1000 + Number(db.prepare("SELECT COUNT(*) AS count FROM orders").get().count) + 1}`;
+      db.prepare(`
+        INSERT INTO orders
+        (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Paid', ?, ?, ?)
+      `).run(
+        orderCode,
+        o.customerName,
+        String(o.email).toLowerCase(),
+        o.phone,
+        o.address,
+        o.city,
+        o.state,
+        o.pincode,
+        total,
+        JSON.stringify(items),
+        new Date().toISOString()
+      );
+      const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
+      for (const item of items) reduceStock.run(item.quantity, item.id);
+      json(res, 201, { orderCode, redirect: `/order-success/${encodeURIComponent(orderCode)}` });
+      return;
+    } catch (error) {
+      json(res, 400, { error: error.message || "Payment verification failed" });
+      return;
+    }
+  }
+
+  if (req.method === "GET" && pathname.startsWith("/order-success/")) {
+    html(res, 200, orderSuccessPage(pathname.split("/").pop(), currentUser));
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/cart/merge") {
+    if (!currentUser) {
+      json(res, 401, { error: "Not authenticated" });
+      return;
+    }
+    try {
+      const raw = await readBody(req);
+      const payload = JSON.parse(raw || "{}");
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      // No server-side cart table exists in this codebase — the cart is client-side (localStorage).
+      // We validate items, echo back a normalised merge list, and let the client write them to its store.
+      const merged = [];
+      for (const it of items) {
+        const slug = String(it.slug || "").trim();
+        const qty = Math.max(1, Number(it.qty || it.quantity || 1));
+        if (!slug) continue;
+        const product = db.prepare("SELECT id, slug, name, price, image FROM products WHERE slug = ?").get(slug);
+        if (!product) continue;
+        merged.push({
+          id: product.id,
+          slug: product.slug,
+          name: product.name,
+          price: product.price,
+          image: product.image,
+          quantity: qty
+        });
+      }
+      json(res, 200, { ok: true, items: merged });
+      return;
+    } catch (error) {
+      json(res, 400, { error: error.message || "Cart merge failed" });
       return;
     }
   }
@@ -3795,6 +4830,32 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/auth/resend-otp") {
+    const email = String(url.searchParams.get("email") || "").trim().toLowerCase();
+    if (!email) {
+      res.writeHead(302, { Location: "/signup" });
+      res.end();
+      return;
+    }
+    const user = await dataLayer.getUserByEmail(email);
+    if (!user) {
+      res.writeHead(302, { Location: "/signup?error=" + encodeURIComponent("Account not found. Please sign up first.") });
+      res.end();
+      return;
+    }
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
+    await dataLayer.saveOtp({ email, code: otp, purpose: "register", expiresAt });
+    const host = req.headers.host || "localhost:3000";
+    const proto = req.headers["x-forwarded-proto"] || "http";
+    const verifyLink = `${proto}://${host}/auth/verify?email=${encodeURIComponent(email)}&token=${otp}`;
+    let mailResult = { sent: false, mode: "dev" };
+    try { mailResult = await sendOtpEmail(email, otp, verifyLink); } catch (e) { console.warn("[resend] mailer error:", e.message); }
+    console.log(`[resend] OTP for ${email}: ${otp}`);
+    html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp, verifyLink }, { error: "" }));
+    return;
+  }
+
   if (req.method === "POST" && pathname === "/auth/verify-otp") {
     const body = parseFormEncoded(await readBody(req));
     const email = String(body.email || "").trim().toLowerCase();
@@ -3819,7 +4880,8 @@ const server = http.createServer(async (req, res) => {
     await dataLayer.markUserVerified(email);
     const session = await dataLayer.createSession(email);
     setSessionCookie(res, session.token, session.expiresAt);
-    res.writeHead(302, { Location: "/account" });
+    const hasAddr = Boolean((parseCookies(req) || {}).mp_addr);
+    res.writeHead(302, { Location: hasAddr ? "/account" : "/account?prompt_addr=1" });
     res.end();
     return;
   }
@@ -3833,6 +4895,61 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(302, { Location: "/" });
     res.end();
     return;
+  }
+
+  if (req.method === "POST" && pathname === "/admin/products/create") {
+    if (!isAdmin(currentUser)) { res.writeHead(302, { Location: "/admin/login" }); res.end(); return; }
+    try {
+      const ct = String(req.headers["content-type"] || "");
+      const m = ct.match(/boundary=(.+)/);
+      if (!m) { json(res, 400, { error: "Missing multipart boundary" }); return; }
+      const buf = await readRawBuffer(req);
+      const { fields, files } = parseMultipart(buf, m[1]);
+      const name = String(fields.name || "").trim();
+      const brand = String(fields.brand || "").trim();
+      const category = String(fields.category || "").trim();
+      const price = Number(fields.price || 0);
+      const originalPrice = Number(fields.originalPrice || 0);
+      const rating = Number(fields.rating || 4.2);
+      const reviews = Number(fields.reviews || 100);
+      const stock = Number(fields.stock || 0);
+      const badge = String(fields.badge || "New").trim();
+      const description = String(fields.description || "").trim();
+      const specs = parseListField(fields.specs);
+      const existingSlug = String(fields.existingSlug || "").trim();
+      const wordCount = countWords(description);
+      if (wordCount < 250) {
+        json(res, 400, { error: `Description must be at least 250 words. Current: ${wordCount}.` });
+        return;
+      }
+      if (!name || !brand || !category || !price || !originalPrice) {
+        json(res, 400, { error: "Missing required fields" });
+        return;
+      }
+      const imageFiles = files.filter(f => f.field === "images" && f.data && f.data.length > 0 && /^image\//i.test(f.contentType));
+      if (!imageFiles.length && !existingSlug) {
+        json(res, 400, { error: "At least one image is required" });
+        return;
+      }
+      const savedImages = [];
+      for (const f of imageFiles) {
+        const extGuess = (f.filename.match(/\.([a-zA-Z0-9]+)$/) || [, "jpg"])[1].toLowerCase();
+        const fileName = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}.${extGuess}`;
+        fs.writeFileSync(path.join(UPLOADS_DIR, fileName), f.data);
+        savedImages.push(`/public/assets/uploads/${fileName}`);
+      }
+      const slug = slugify(name);
+      if (existingSlug) {
+        const imgs = savedImages.length ? savedImages : (db.prepare("SELECT images_json FROM products WHERE slug = ?").get(existingSlug)?.images_json ? JSON.parse(db.prepare("SELECT images_json FROM products WHERE slug = ?").get(existingSlug).images_json) : []);
+        db.prepare(`UPDATE products SET slug=?, name=?, brand=?, category=?, price=?, original_price=?, rating=?, reviews=?, stock=?, image=?, images_json=?, badge=?, description=?, specs_json=? WHERE slug=?`)
+          .run(slug, name, brand, category, price, originalPrice, rating, reviews, stock, imgs[0] || "", JSON.stringify(imgs), badge, description, JSON.stringify(specs), existingSlug);
+      } else {
+        db.prepare(`INSERT INTO products (slug, name, brand, category, price, original_price, rating, reviews, stock, image, images_json, badge, description, specs_json, featured) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
+          .run(slug, name, brand, category, price, originalPrice, rating, reviews, stock, savedImages[0] || "", JSON.stringify(savedImages), badge, description, JSON.stringify(specs));
+      }
+      json(res, 200, { ok: true, slug });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
   }
 
   if (req.method === "POST" && pathname === "/admin/products") {
@@ -3903,13 +5020,225 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // === Maple new pages ===
+  if (req.method === "GET" && pathname === "/about") { html(res, 200, aboutPage(currentUser)); return; }
+  if (req.method === "GET" && pathname === "/contact") { html(res, 200, contactPage(currentUser)); return; }
+  if (req.method === "GET" && pathname === "/services") { html(res, 200, servicesPage(currentUser)); return; }
+  if (req.method === "GET" && pathname === "/terms") { html(res, 200, termsPage(currentUser)); return; }
+  if (req.method === "GET" && pathname === "/privacy") { html(res, 200, privacyPage(currentUser)); return; }
+  if (req.method === "GET" && pathname === "/disclaimer") { html(res, 200, disclaimerPage(currentUser)); return; }
+  if (req.method === "GET" && pathname === "/refund") { html(res, 200, refundPage(currentUser)); return; }
+  if (req.method === "GET" && pathname === "/story") { res.writeHead(302, { Location: "/about" }); res.end(); return; }
+  if (req.method === "GET" && pathname === "/wishlist") {
+    if (!currentUser) { res.writeHead(302, { Location: "/login?next=/wishlist" }); res.end(); return; }
+    html(res, 200, wishlistPage(currentUser)); return;
+  }
+
+  // Address widget
+  if (req.method === "POST" && pathname === "/api/address") {
+    try {
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const city = String(payload.city || "").trim();
+      const state = String(payload.state || "").trim();
+      const pin = String(payload.pin || "").trim();
+      if (!city || !state || !/^\d{6}$/.test(pin)) {
+        json(res, 400, { error: "Invalid address. PIN must be 6 digits." });
+        return;
+      }
+      const val = encodeURIComponent(JSON.stringify({ city, state, pin }));
+      res.setHeader("Set-Cookie", `mp_addr=${val}; Path=/; Max-Age=${60 * 60 * 24 * 365}; SameSite=Lax`);
+      json(res, 200, { ok: true });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
+  // Theme cookie
+  if (req.method === "POST" && pathname === "/api/theme") {
+    try {
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const theme = String(payload.theme || "snow").replace(/[^a-z]/g, "") || "snow";
+      const allowed = ["snow","pearl","cloud","sand","mint","rose","ivory","arctic","lavender","sage","midnight","charcoal","navy","slate","espresso","forest","plum","storm","obsidian","carbon"];
+      const t = allowed.includes(theme) ? theme : "snow";
+      res.setHeader("Set-Cookie", `mp_theme=${t}; Path=/; Max-Age=${60 * 60 * 24 * 365}; SameSite=Lax`);
+      json(res, 200, { ok: true, theme: t });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
+  // Newsletter
+  if (req.method === "POST" && pathname === "/api/newsletter") {
+    try {
+      const raw = await readBody(req);
+      let email = "";
+      try { email = (JSON.parse(raw || "{}").email || "").trim().toLowerCase(); }
+      catch { email = (parseFormEncoded(raw).email || "").trim().toLowerCase(); }
+      if (!email || !email.includes("@")) { json(res, 400, { error: "Invalid email" }); return; }
+      try {
+        db.prepare("INSERT INTO newsletter_subscribers (email, created_at) VALUES (?, ?)").run(email, new Date().toISOString());
+      } catch (_e) { /* duplicate OK */ }
+      json(res, 200, { ok: true });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
+  // Contact form
+  if (req.method === "POST" && pathname === "/api/contact") {
+    try {
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const { name, email, phone = "", subject, message } = payload;
+      if (!name || !email || !subject || !message) { json(res, 400, { error: "Missing fields" }); return; }
+      db.prepare("INSERT INTO contact_messages (name, email, phone, subject, message, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(String(name), String(email).toLowerCase(), String(phone), String(subject), String(message), new Date().toISOString());
+      try { await sendOtpEmail("admin@MapleCoreInc.com", `CONTACT from ${email}: ${subject}`); } catch { /* optional */ }
+      json(res, 200, { ok: true });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
+  // Support token
+  if (req.method === "POST" && pathname === "/api/support-token") {
+    try {
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const email = String(payload.email || "").toLowerCase();
+      const rand = (n) => crypto.randomBytes(n).toString("hex").toUpperCase().slice(0, n * 2);
+      const token = `MP-${rand(2)}-${rand(2)}`;
+      db.prepare("INSERT INTO support_tokens (token, email, created_at) VALUES (?, ?, ?)").run(token, email, new Date().toISOString());
+      json(res, 200, { ok: true, token });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
+  // Checkout email OTP
+  if (req.method === "POST" && pathname === "/api/checkout/email-otp") {
+    try {
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const email = String(payload.email || "").trim().toLowerCase();
+      if (!email.includes("@")) { json(res, 400, { error: "Invalid email" }); return; }
+      const cookies = parseCookies(req);
+      const sessTok = cookies.session_token || "guest-" + (req.headers["x-forwarded-for"] || "anon");
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      db.prepare("DELETE FROM checkout_email_otps WHERE session_token = ?").run(sessTok);
+      db.prepare("INSERT INTO checkout_email_otps (session_token, email, code, verified, created_at) VALUES (?, ?, ?, 0, ?)")
+        .run(sessTok, email, code, new Date().toISOString());
+      try { await sendOtpEmail(email, code); } catch { /* dev */ }
+      console.log(`[checkout-otp] ${email}: ${code}`);
+      json(res, 200, { ok: true });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
+  if (req.method === "POST" && pathname === "/api/checkout/verify-email") {
+    try {
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const email = String(payload.email || "").trim().toLowerCase();
+      const code = String(payload.code || "").trim();
+      const cookies = parseCookies(req);
+      const sessTok = cookies.session_token || "guest-" + (req.headers["x-forwarded-for"] || "anon");
+      const row = db.prepare("SELECT * FROM checkout_email_otps WHERE session_token = ? AND email = ? ORDER BY id DESC LIMIT 1").get(sessTok, email);
+      if (!row || row.code !== code) { json(res, 400, { error: "Invalid code" }); return; }
+      db.prepare("UPDATE checkout_email_otps SET verified = 1 WHERE id = ?").run(row.id);
+      json(res, 200, { ok: true });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
+  // Payment stubs
+  if (req.method === "POST" && pathname.startsWith("/api/payment/") && (pathname.endsWith("/create-session") || pathname.endsWith("/create-order") || pathname.endsWith("/wise/confirm"))) {
+    try {
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const provider = pathname.includes("stripe") ? "stripe" : pathname.includes("paypal") ? "paypal" : "wise";
+      const o = payload.order || payload;
+      const required = ["customerName", "email", "phone", "address", "city", "state", "pincode", "items"];
+      for (const k of required) {
+        if (!o[k] || (Array.isArray(o[k]) && o[k].length === 0)) { json(res, 400, { error: `Missing ${k}` }); return; }
+      }
+      // Email verification enforcement
+      const cookies = parseCookies(req);
+      const sessTok = cookies.session_token || "guest-" + (req.headers["x-forwarded-for"] || "anon");
+      const verified = db.prepare("SELECT * FROM checkout_email_otps WHERE session_token = ? AND email = ? AND verified = 1 ORDER BY id DESC LIMIT 1").get(sessTok, String(o.email).toLowerCase());
+      if (!verified) { json(res, 400, { error: "Email not verified. Please verify your email before paying." }); return; }
+
+      const items = o.items.map((item) => {
+        const product = db.prepare("SELECT id, name, price, stock FROM products WHERE id = ?").get(item.id);
+        if (!product) throw new Error(`Product ${item.id} not found`);
+        const quantity = Math.max(1, Number(item.quantity || 1));
+        if (quantity > product.stock) throw new Error(`Only ${product.stock} units left for ${product.name}`);
+        return { id: product.id, name: product.name, price: product.price, quantity };
+      });
+      const total = items.reduce((s, i) => s + i.price * i.quantity, 0);
+      const orderCode = `ORD-${1000 + Number(db.prepare("SELECT COUNT(*) AS count FROM orders").get().count) + 1}`;
+      const status = provider === "wise" ? "Awaiting payment confirmation" : "Paid";
+      db.prepare(`INSERT INTO orders (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        orderCode, o.customerName, String(o.email).toLowerCase(), o.phone, o.address, o.city, o.state, o.pincode, status, total, JSON.stringify(items), new Date().toISOString(), provider
+      );
+      const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
+      for (const it of items) reduceStock.run(it.quantity, it.id);
+      json(res, 200, { ok: true, orderCode, checkoutUrl: `/order-success/${encodeURIComponent(orderCode)}`, redirect: `/order-success/${encodeURIComponent(orderCode)}` });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
+  // ===== Reviews API =====
+  if (req.method === "POST" && pathname === "/api/reviews") {
+    try {
+      if (!currentUser) { json(res, 401, { error: "Please log in to write a review." }); return; }
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const productId = Number(payload.productId);
+      const rating = Math.max(1, Math.min(5, Number(payload.rating || 0)));
+      const title = String(payload.title || "").trim().slice(0, 100);
+      const body = String(payload.body || "").trim();
+      if (!productId) { json(res, 400, { error: "Invalid product" }); return; }
+      if (!rating || rating < 1 || rating > 5) { json(res, 400, { error: "Rating must be 1–5" }); return; }
+      if (body.length < 20) { json(res, 400, { error: "Please write at least 20 characters." }); return; }
+      const exists = db.prepare("SELECT id FROM product_reviews WHERE user_email = ? AND product_id = ?").get(currentUser.email, productId);
+      if (exists) {
+        db.prepare("UPDATE product_reviews SET rating=?, title=?, body=?, created_at=?, hidden=0 WHERE id=?")
+          .run(rating, title || "Customer review", body, new Date().toISOString(), exists.id);
+      } else {
+        db.prepare("INSERT INTO product_reviews (product_id, user_email, user_name, rating, title, body, created_at, hidden) VALUES (?,?,?,?,?,?,?,0)")
+          .run(productId, currentUser.email, currentUser.name, rating, title || "Customer review", body, new Date().toISOString());
+      }
+      json(res, 200, { ok: true });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
+  if (req.method === "POST" && pathname.startsWith("/admin/reviews/")) {
+    if (!isAdmin(currentUser)) { res.writeHead(302, { Location: "/admin/login" }); res.end(); return; }
+    const parts = pathname.split("/");
+    const id = Number(parts[3]);
+    const action = parts[4];
+    if (id && action === "delete") { db.prepare("DELETE FROM product_reviews WHERE id=?").run(id); }
+    else if (id && action === "hide") { db.prepare("UPDATE product_reviews SET hidden=1 WHERE id=?").run(id); }
+    res.writeHead(302, { Location: "/admin?section=reviews" }); res.end(); return;
+  }
+
+  // ===== Wishlist API =====
+  if (req.method === "POST" && (pathname === "/api/wishlist/add" || pathname === "/api/wishlist/remove")) {
+    try {
+      if (!currentUser) { json(res, 401, { error: "Please log in." }); return; }
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const productId = Number(payload.productId);
+      if (!productId) { json(res, 400, { error: "Invalid product" }); return; }
+      if (pathname.endsWith("/add")) {
+        try {
+          db.prepare("INSERT INTO wishlists (user_email, product_id, created_at) VALUES (?,?,?)").run(currentUser.email, productId, new Date().toISOString());
+        } catch (_e) { /* already exists */ }
+      } else {
+        db.prepare("DELETE FROM wishlists WHERE user_email=? AND product_id=?").run(currentUser.email, productId);
+      }
+      json(res, 200, { ok: true });
+      return;
+    } catch (e) { json(res, 400, { error: e.message }); return; }
+  }
+
   html(res, 404, notFoundPage(currentUser));
 });
 
 async function start() {
   dataLayer = await createDataLayer(db, MONGODB_URI);
   server.listen(PORT, () => {
-    console.log(`ElectroHub running at http://localhost:${PORT}`);
+    console.log(`MAPLE running at http://localhost:${PORT}`);
   });
 }
 

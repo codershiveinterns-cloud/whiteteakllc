@@ -20,10 +20,10 @@ function getMailerConfig() {
   };
 }
 
-async function sendOtpEmail(email, otp) {
+async function sendOtpEmail(email, otp, verifyLink = "") {
   const config = getMailerConfig();
   if (!config) {
-    return { sent: false, mode: "dev" };
+    return { sent: false, mode: "dev", otp, verifyLink };
   }
 
   const transporter = nodemailer.createTransport({
@@ -33,12 +33,29 @@ async function sendOtpEmail(email, otp) {
     auth: config.auth
   });
 
+  const linkBlockText = verifyLink
+    ? `\n\nOr click this link to verify instantly:\n${verifyLink}\n`
+    : "";
+  const linkBlockHtml = verifyLink
+    ? `<p>Or click the button below to verify instantly:</p>
+       <p><a href="${verifyLink}" style="display:inline-block;padding:12px 24px;background:#111;color:#fff;border-radius:6px;text-decoration:none;font-weight:600">Verify my account</a></p>
+       <p style="font-size:12px;color:#666">If the button doesn't work, paste this URL into your browser:<br><a href="${verifyLink}">${verifyLink}</a></p>`
+    : "";
+
   await transporter.sendMail({
     from: config.from,
     to: email,
-    subject: "Your ElectroHub OTP code",
-    text: `Your ElectroHub OTP is ${otp}. It is valid for 10 minutes.`,
-    html: `<p>Your ElectroHub OTP is <strong>${otp}</strong>.</p><p>It is valid for 10 minutes.</p>`
+    subject: "Your MAPLE verification code",
+    text: `Your MAPLE OTP is ${otp}. It is valid for 10 minutes.${linkBlockText}`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px">
+             <h2 style="color:#111">Welcome to MAPLE</h2>
+             <p>Your verification code is:</p>
+             <p style="font-size:32px;letter-spacing:6px;font-weight:700;background:#f4f4f6;padding:16px 24px;border-radius:8px;text-align:center;color:#111">${otp}</p>
+             <p>This code is valid for 10 minutes.</p>
+             ${linkBlockHtml}
+             <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
+             <p style="font-size:12px;color:#888">If you didn't request this, you can safely ignore this email.</p>
+           </div>`
   });
 
   return { sent: true, mode: "smtp" };

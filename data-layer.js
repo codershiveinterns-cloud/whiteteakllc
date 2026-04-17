@@ -60,7 +60,7 @@ class SqliteStore {
     const passwordHash = hashPassword("Admin@123");
     this.db.prepare(
       "INSERT INTO users (name, email, password_hash, verified, created_at) VALUES (?, ?, ?, 1, ?)"
-    ).run("ElectroHub Admin", email, passwordHash, now);
+    ).run("MAPLE Admin", email, passwordHash, now);
   }
 
   async getUserByEmail(email) {
