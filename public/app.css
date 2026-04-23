@@ -2322,6 +2322,9 @@ body[class*="theme-"] .cr-footer .cr-footer-social a:hover {
 .eo-auth-form input:focus { outline: none; border-color: #6d28d9; box-shadow: 0 0 0 3px rgba(109,40,217,0.12); }
 .eo-auth-btn { margin-top: 8px; padding: 13px 16px; border: 0; border-radius: 10px; background: linear-gradient(135deg, #6d28d9, #4f46e5); color: #fff; font-weight: 700; font-size: 15px; cursor: pointer; transition: transform 0.12s, box-shadow 0.15s; }
 .eo-auth-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(79,70,229,0.3); }
+.eo-auth-row-between { display: flex; justify-content: flex-end; margin: -4px 0 2px; }
+.eo-auth-forgot { color: #6d28d9; font-size: 13px; font-weight: 600; text-decoration: none; }
+.eo-auth-forgot:hover { text-decoration: underline; }
 .eo-auth-foot { text-align: center; margin: 20px 0 0; color: var(--text-muted); font-size: 14px; }
 .eo-auth-foot a { color: #6d28d9; font-weight: 600; text-decoration: none; }
 .eo-auth-foot-sm { text-align: center; margin: 8px 0 0; color: #9ca3af; font-size: 12.5px; }

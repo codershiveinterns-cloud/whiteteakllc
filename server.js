@@ -3585,10 +3585,95 @@ function authPage({ message = "", email = "", verified = false, error = "", next
               <form class="eo-auth-form" method="POST" action="${loginAction}">
                 <label>Email<input type="email" name="email" value="${escapeHtml(email)}" required autocomplete="email"></label>
                 <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
+                <div class="eo-auth-row-between"><a class="eo-auth-forgot" href="/forgot-password${email ? `?email=${encodeURIComponent(email)}` : ""}">Forgot password?</a></div>
                 <button class="eo-auth-btn" type="submit">Login</button>
               </form>
               <p class="eo-auth-foot">New here? <a href="/signup">Create an account</a></p>
               <p class="eo-auth-foot-sm">Are you an administrator? <a href="/admin/login">Admin login</a></p>
+            </div>
+          </div>
+        </section>
+      </main>
+    `
+  });
+}
+
+function forgotPasswordPage({ message = "", error = "", email = "" } = {}, user = null) {
+  return layout({
+    title: "Forgot password – MAPLE",
+    description: "Reset your MAPLE account password using an OTP sent to your registered email.",
+    currentPath: "/forgot-password",
+    user,
+    content: `
+      ${CR_HIDE_LEGACY_FOOTER_STYLE}
+      <main class="eo-auth-shell">
+        <section class="eo-auth-split">
+          <aside class="eo-auth-left">
+            <div class="eo-auth-left-inner">
+              <h2 class="eo-auth-tag">Reset your password</h2>
+              <p class="eo-auth-tag-sub">Enter the email you registered with. We'll send a one-time code to verify it's you, then let you set a new password.</p>
+              <div class="eo-auth-illus" aria-hidden="true"><span></span><span></span><span></span></div>
+            </div>
+          </aside>
+          <div class="eo-auth-right">
+            <div class="eo-auth-card">
+              <h1 class="eo-auth-title">Forgot password</h1>
+              <p class="eo-auth-sub">We'll email a 6-digit OTP to your registered address.</p>
+              ${message ? `<div class="eo-auth-banner">${escapeHtml(message)}</div>` : ""}
+              ${error ? `<div class="eo-auth-banner eo-auth-error">${escapeHtml(error)}</div>` : ""}
+              <form class="eo-auth-form" method="POST" action="/auth/forgot-password">
+                <label>Registered email<input type="email" name="email" value="${escapeHtml(email)}" required autocomplete="email"></label>
+                <button class="eo-auth-btn" type="submit">Send OTP</button>
+              </form>
+              <p class="eo-auth-foot"><a href="/login">← Back to login</a></p>
+            </div>
+          </div>
+        </section>
+      </main>
+    `
+  });
+}
+
+function resetPasswordPage({ message = "", error = "", email = "", devOtp = "", maskedPhone = "" } = {}, user = null) {
+  const devHint = devOtp ? `
+    <div style="margin-top:10px;padding:12px 14px;background:#fff8e1;border:1px solid #f7d774;border-radius:8px;color:#5b4500;font-size:13px">
+      <strong>Dev mode:</strong> SMTP not configured. Your OTP is
+      <code style="display:inline-block;padding:2px 8px;background:#fff;border-radius:4px;font-size:16px;letter-spacing:3px;font-weight:700">${escapeHtml(devOtp)}</code>
+    </div>` : "";
+  const phoneLine = maskedPhone ? `<p class="eo-auth-sub" style="margin-top:4px;font-size:13px;color:#666">Registered mobile on file: <strong>${escapeHtml(maskedPhone)}</strong> (SMS delivery coming soon — use the email OTP for now).</p>` : "";
+  return layout({
+    title: "Reset password – MAPLE",
+    description: "Enter the OTP and choose a new password for your MAPLE account.",
+    currentPath: "/auth/reset-password",
+    user,
+    content: `
+      ${CR_HIDE_LEGACY_FOOTER_STYLE}
+      <main class="eo-auth-shell">
+        <section class="eo-auth-split">
+          <aside class="eo-auth-left">
+            <div class="eo-auth-left-inner">
+              <h2 class="eo-auth-tag">Almost there</h2>
+              <p class="eo-auth-tag-sub">Enter the 6-digit code we sent to your email and choose a new password.</p>
+              <div class="eo-auth-illus" aria-hidden="true"><span></span><span></span><span></span></div>
+            </div>
+          </aside>
+          <div class="eo-auth-right">
+            <div class="eo-auth-card">
+              <h1 class="eo-auth-title">Set a new password</h1>
+              <p class="eo-auth-sub">OTP sent to <strong>${escapeHtml(email)}</strong>. Valid for 10 minutes.</p>
+              ${phoneLine}
+              ${message ? `<div class="eo-auth-banner">${escapeHtml(message)}</div>` : ""}
+              ${error ? `<div class="eo-auth-banner eo-auth-error">${escapeHtml(error)}</div>` : ""}
+              ${devHint}
+              <form class="eo-auth-form" method="POST" action="/auth/reset-password">
+                <input type="hidden" name="email" value="${escapeHtml(email)}">
+                <label>6-digit OTP<input name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code"></label>
+                <label>New password<input type="password" name="password" required minlength="6" autocomplete="new-password"></label>
+                <label>Confirm new password<input type="password" name="confirm" required minlength="6" autocomplete="new-password"></label>
+                <button class="eo-auth-btn" type="submit">Reset password</button>
+              </form>
+              <p class="eo-auth-foot" style="margin-top:12px">Didn't get the code? <a href="/auth/forgot-password-resend?email=${encodeURIComponent(email)}">Resend OTP</a></p>
+              <p class="eo-auth-foot-sm"><a href="/login">← Back to login</a></p>
             </div>
           </div>
         </section>
@@ -3954,12 +4039,13 @@ function adminPage(user = null, opts = {}) {
       <div class="cr-admin-card-head"><h3>All Orders (${stats.orders})</h3></div>
       <div style="overflow-x:auto">
       <table class="cr-admin-table eo-admin-orders-table">
-        <thead><tr><th>Ref</th><th>Customer</th><th>Date</th><th>Shipping Address</th><th>Total</th><th>Status</th></tr></thead>
+        <thead><tr><th>Ref</th><th>Customer</th><th>Phone</th><th>Date</th><th>Shipping Address</th><th>Total</th><th>Status</th></tr></thead>
         <tbody>
           ${allOrders.length ? allOrders.map(order => `
             <tr>
               <td>${escapeHtml(order.order_code)}</td>
               <td>${escapeHtml(order.customer_name)}</td>
+              <td>${order.phone ? `<a href="tel:${escapeHtml(order.phone)}">${escapeHtml(order.phone)}</a>` : "—"}</td>
               <td>${new Date(order.created_at).toLocaleDateString("en-IN")}</td>
               <td>${escapeHtml(order.address)}, ${escapeHtml(order.city)}, ${escapeHtml(order.state)} ${escapeHtml(order.pincode)}</td>
               <td>${currency(order.total)}</td>
@@ -3973,7 +4059,7 @@ function adminPage(user = null, opts = {}) {
                 </form>
               </td>
             </tr>
-          `).join("") : `<tr><td colspan="6">No orders yet.</td></tr>`}
+          `).join("") : `<tr><td colspan="7">No orders yet.</td></tr>`}
         </tbody>
       </table>
       </div>
@@ -4035,20 +4121,24 @@ function adminPage(user = null, opts = {}) {
       <div class="cr-admin-card-head"><h3>User Management (${userCount})</h3></div>
       <div style="overflow-x:auto">
       <table class="cr-admin-table">
-        <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Password (masked)</th><th>Verified</th><th>Orders</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Mobile (from checkout)</th><th>Password (masked)</th><th>Verified</th><th>Orders</th></tr></thead>
         <tbody>
           ${allUsers.length ? allUsers.map(u => {
             const orders = db.prepare("SELECT order_code FROM orders WHERE email = ? ORDER BY id DESC").all(u.email);
             const refs = orders.map(o => o.order_code).join(", ") || "—";
+            const phoneRow = db.prepare("SELECT phone FROM orders WHERE email = ? AND phone IS NOT NULL AND phone != '' ORDER BY id DESC LIMIT 1").get(u.email);
+            const phone = phoneRow && phoneRow.phone ? String(phoneRow.phone) : "";
+            const phoneCell = phone ? `<a href="tel:${escapeHtml(phone)}">${escapeHtml(phone)}</a>` : `<span style="color:#999">not provided</span>`;
             return `<tr>
               <td>${u.id}</td>
               <td>${escapeHtml(u.name)}</td>
               <td>${escapeHtml(u.email)}</td>
+              <td>${phoneCell}</td>
               <td><code>${escapeHtml(maskedPwd(u.password_hash))}</code></td>
               <td>${u.verified ? "Yes" : "No"}</td>
               <td>${escapeHtml(refs)}</td>
             </tr>`;
-          }).join("") : `<tr><td colspan="6">No users registered yet.</td></tr>`}
+          }).join("") : `<tr><td colspan="7">No users registered yet.</td></tr>`}
         </tbody>
       </table>
       </div>
@@ -5181,6 +5271,108 @@ async function handleRequest(req, res) {
       name: url.searchParams.get("name") || "",
       email: url.searchParams.get("email") || ""
     }, currentUser));
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/forgot-password") {
+    html(res, 200, forgotPasswordPage({
+      message: url.searchParams.get("message") || "",
+      error: url.searchParams.get("error") || "",
+      email: url.searchParams.get("email") || ""
+    }, currentUser));
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/auth/forgot-password") {
+    const body = parseFormEncoded(await readBody(req));
+    const email = String(body.email || "").trim().toLowerCase();
+    if (!email) {
+      res.writeHead(302, { Location: `/forgot-password?error=${encodeURIComponent("Please enter your registered email.")}` });
+      res.end();
+      return;
+    }
+    const user = await dataLayer.getUserByEmail(email);
+    if (!user) {
+      res.writeHead(302, { Location: `/forgot-password?error=${encodeURIComponent("No account found for that email. Please sign up first.")}&email=${encodeURIComponent(email)}` });
+      res.end();
+      return;
+    }
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
+    await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
+    let mailResult = { sent: false, mode: "dev" };
+    try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot] mailer error:", e.message); }
+    console.log(`[forgot] reset OTP for ${email}: ${otp}`);
+    let maskedPhone = "";
+    try {
+      const row = db.prepare("SELECT phone FROM orders WHERE email = ? AND phone IS NOT NULL AND phone != '' ORDER BY id DESC LIMIT 1").get(email);
+      if (row && row.phone) {
+        const p = String(row.phone);
+        maskedPhone = p.length >= 4 ? p.slice(0, 2) + "•".repeat(Math.max(0, p.length - 4)) + p.slice(-2) : p;
+      }
+    } catch { /* phone optional */ }
+    const devOtp = mailResult.mode === "dev" ? otp : "";
+    html(res, 200, resetPasswordPage({
+      email,
+      message: "OTP sent. Please check your inbox (and spam folder).",
+      devOtp,
+      maskedPhone
+    }, currentUser));
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/auth/forgot-password-resend") {
+    const email = String(url.searchParams.get("email") || "").trim().toLowerCase();
+    if (!email) { res.writeHead(302, { Location: "/forgot-password" }); res.end(); return; }
+    const user = await dataLayer.getUserByEmail(email);
+    if (!user) {
+      res.writeHead(302, { Location: `/forgot-password?error=${encodeURIComponent("No account found for that email.")}&email=${encodeURIComponent(email)}` });
+      res.end();
+      return;
+    }
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
+    await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
+    let mailResult = { sent: false, mode: "dev" };
+    try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot-resend] mailer error:", e.message); }
+    console.log(`[forgot-resend] reset OTP for ${email}: ${otp}`);
+    const devOtp = mailResult.mode === "dev" ? otp : "";
+    html(res, 200, resetPasswordPage({ email, message: "A new OTP has been sent.", devOtp }, currentUser));
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/auth/reset-password") {
+    const body = parseFormEncoded(await readBody(req));
+    const email = String(body.email || "").trim().toLowerCase();
+    const otp = String(body.otp || "").trim();
+    const password = String(body.password || "");
+    const confirm = String(body.confirm || "");
+    if (!email || !otp || !password || !confirm) {
+      html(res, 200, resetPasswordPage({ email, error: "Please fill every field." }, currentUser));
+      return;
+    }
+    if (password.length < 6) {
+      html(res, 200, resetPasswordPage({ email, error: "Password must be at least 6 characters." }, currentUser));
+      return;
+    }
+    if (password !== confirm) {
+      html(res, 200, resetPasswordPage({ email, error: "Passwords do not match." }, currentUser));
+      return;
+    }
+    const user = await dataLayer.getUserByEmail(email);
+    if (!user) {
+      res.writeHead(302, { Location: `/forgot-password?error=${encodeURIComponent("Account not found. Please sign up first.")}` });
+      res.end();
+      return;
+    }
+    const ok = await dataLayer.verifyOtp({ email, code: otp, purpose: "reset" });
+    if (!ok) {
+      html(res, 200, resetPasswordPage({ email, error: "The OTP is invalid or expired. Please request a new one." }, currentUser));
+      return;
+    }
+    await dataLayer.updateUserPassword(email, password);
+    res.writeHead(302, { Location: `/login?message=${encodeURIComponent("Password reset successfully. Please log in with your new password.")}&email=${encodeURIComponent(email)}` });
+    res.end();
     return;
   }
 

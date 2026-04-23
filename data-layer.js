@@ -79,6 +79,12 @@ class SqliteStore {
     this.db.prepare("UPDATE users SET verified = 1 WHERE email = ?").run(email.toLowerCase());
   }
 
+  async updateUserPassword(email, newPassword) {
+    const passwordHash = hashPassword(newPassword);
+    this.db.prepare("UPDATE users SET password_hash = ? WHERE email = ?").run(passwordHash, email.toLowerCase());
+    return passwordHash;
+  }
+
   async saveOtp({ email, code, purpose, expiresAt }) {
     const now = new Date().toISOString();
     const codeHash = hashPassword(code);
@@ -172,6 +178,17 @@ class MongoMirrorStore {
         { $set: { verified: 1 } }
       );
     }
+  }
+
+  async updateUserPassword(email, newPassword) {
+    const passwordHash = await this.sqliteStore.updateUserPassword(email, newPassword);
+    if (this.db) {
+      await this.db.collection("users").updateOne(
+        { email: email.toLowerCase() },
+        { $set: { password_hash: passwordHash } }
+      );
+    }
+    return passwordHash;
   }
 
   async saveOtp(payload) {
