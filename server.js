@@ -5227,6 +5227,8 @@ async function handleRequest(req, res) {
 
   if (req.method === "GET" && pathname === "/admin/env-check") {
     // Safe diagnostic: reports only whether each env var is non-empty, never the value.
+    let nodemailerOk = false;
+    try { require("nodemailer"); nodemailerOk = true; } catch { nodemailerOk = false; }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       ADMIN_USERNAME_set: Boolean(process.env.ADMIN_USERNAME),
@@ -5234,6 +5236,14 @@ async function handleRequest(req, res) {
       AUTH_SECRET_set: Boolean(process.env.AUTH_SECRET),
       ADMIN_SYNTHETIC_EMAIL_set: Boolean(process.env.ADMIN_SYNTHETIC_EMAIL),
       SMTP_HOST_set: Boolean(process.env.SMTP_HOST),
+      SMTP_PORT_set: Boolean(process.env.SMTP_PORT),
+      SMTP_USER_set: Boolean(process.env.SMTP_USER),
+      SMTP_PASS_set: Boolean(process.env.SMTP_PASS),
+      SMTP_FROM_set: Boolean(process.env.SMTP_FROM),
+      SMTP_REPLY_TO_set: Boolean(process.env.SMTP_REPLY_TO),
+      FIREBASE_SERVICE_ACCOUNT_set: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT),
+      FIREBASE_PROJECT_ID_set: Boolean(process.env.FIREBASE_PROJECT_ID),
+      nodemailer_installed: nodemailerOk,
       dotenv_file_present: fs.existsSync(path.join(ROOT, ".env")),
       IS_VERCEL,
       root: ROOT
