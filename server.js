@@ -1182,6 +1182,26 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
     <script>window.__WW_THEME__=${JSON.stringify(theme || "snow")};</script>
     <script>window.MP_CITIES=${JSON.stringify(INDIAN_CITIES)};window.MP_STATES=${JSON.stringify(INDIAN_STATES)};</script>
     <script src="/public/app.js"></script>
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+      import { getAnalytics, isSupported as analyticsSupported } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-analytics.js";
+      const firebaseConfig = {
+        apiKey: "AIzaSyBYuNRiKdggUGZrjl6lnBYFNYGuINuOa2I",
+        authDomain: "wizardwork-16a96.firebaseapp.com",
+        projectId: "wizardwork-16a96",
+        storageBucket: "wizardwork-16a96.firebasestorage.app",
+        messagingSenderId: "220610525597",
+        appId: "1:220610525597:web:ff1aa88fff190a9b849774",
+        measurementId: "G-P15FK543DV"
+      };
+      try {
+        const app = initializeApp(firebaseConfig);
+        window.__FB_APP__ = app;
+        analyticsSupported().then(ok => { if (ok) { window.__FB_ANALYTICS__ = getAnalytics(app); } });
+      } catch (e) {
+        console.warn("[firebase-client] init failed", e);
+      }
+    </script>
   </body>
   </html>`;
 }
@@ -4360,7 +4380,7 @@ function aboutPage(user = null) {
               <li><strong>Single-vendor, single standard.</strong> We own every SKU in our catalogue. No third-party sellers, no inconsistent quality — one standard applies everywhere.</li>
               <li><strong>Genuine only.</strong> We source directly from brands and authorised distributors — zero grey-market stock.</li>
               <li><strong>Transparent pricing.</strong> Transparent pricing in USD, no hidden fees or taxes at checkout.</li>
-              <li><strong>Real support.</strong> A real human on the other end of <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a> — 92% of queries resolved on first contact.</li>
+              <li><strong>Real support.</strong> A real human on the other end of <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a> — 92% of queries resolved on first contact.</li>
               <li><strong>Fair returns.</strong> A simple 30-day return window on eligible items, refunded to the original payment method.</li>
               <li><strong>Secure by default.</strong> TLS in transit, hashed passwords, PCI-compliant payments via Viva Wallet — we never store raw card data.</li>
             </ul>
@@ -4369,7 +4389,7 @@ function aboutPage(user = null) {
             <ul class="mp-about-list">
               <li><strong>Legal entity:</strong> SynapseEngine OÜ (Estonia)</li>
               <li><strong>Registered address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115</li>
-              <li><strong>Customer support:</strong> <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></li>
+              <li><strong>Customer support:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
               <li><strong>Admin / business:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
               <li><strong>Phone:</strong> +37257052072</li>
               <li><strong>Governing law:</strong> India · Jurisdiction: Bengaluru, Karnataka</li>
@@ -4412,7 +4432,7 @@ function termsPage(user = null) {
             <li><strong>Registered Country:</strong> Estonia</li>
             <li><strong>Registered Address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115</li>
             <li><strong>Phone:</strong> +37257052072</li>
-            <li><strong>Contact Email:</strong> <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></li>
+            <li><strong>Contact Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
             <li><strong>Admin Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
           </ul>
 
@@ -4502,7 +4522,7 @@ function termsPage(user = null) {
           <h2>20. Contact Us</h2>
           <p>For support or inquiries:</p>
           <ul>
-            <li>📧 <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></li>
+            <li>📧 <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
             <li>📧 <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
             <li>📞 +37257052072</li>
           </ul>
@@ -4532,7 +4552,7 @@ function privacyPage(user = null) {
             <li><strong>SynapseEngine OÜ</strong></li>
             <li><strong>Registered Address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115, Estonia</li>
             <li><strong>Phone:</strong> +37257052072</li>
-            <li><strong>Email:</strong> <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></li>
+            <li><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
           </ul>
 
           <h2>2. Data We Collect</h2>
@@ -4609,7 +4629,7 @@ function privacyPage(user = null) {
             <li>Request deletion</li>
             <li>Request data portability</li>
           </ul>
-          <p>Contact: <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a>. Response time: within 30 days.</p>
+          <p>Contact: <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a>. Response time: within 30 days.</p>
 
           <h2>12. Children's Privacy</h2>
           <p>Our services are not intended for children under 13. We do not knowingly collect such data.</p>
@@ -4623,7 +4643,7 @@ function privacyPage(user = null) {
           <h2>15. Contact &amp; Data Protection Officer</h2>
           <ul>
             <li><strong>Data Protection Officer:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-            <li><strong>Support:</strong> <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></li>
+            <li><strong>Support:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
             <li><strong>Phone:</strong> +37257052072</li>
           </ul>
         </section>
@@ -4652,7 +4672,7 @@ function disclaimerPage(user = null) {
             <li><strong>SynapseEngine OÜ</strong></li>
             <li><strong>Registered Address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115, Estonia</li>
             <li><strong>Phone:</strong> +37257052072</li>
-            <li><strong>Email:</strong> <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></li>
+            <li><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
           </ul>
 
           <h2>2. Product Information</h2>
@@ -4719,7 +4739,7 @@ function disclaimerPage(user = null) {
           <h2>13. Contact</h2>
           <p>For questions or discrepancies:</p>
           <ul>
-            <li>📧 <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></li>
+            <li>📧 <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
             <li>📞 +37257052072</li>
           </ul>
         </section>
@@ -4748,7 +4768,7 @@ function refundPage(user = null) {
             <li><strong>SynapseEngine OÜ</strong></li>
             <li><strong>Registered Address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115, Estonia</li>
             <li><strong>Phone:</strong> +37257052072</li>
-            <li><strong>Email:</strong> <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></li>
+            <li><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
           </ul>
 
           <h2>2. 30-Day Return Window</h2>
@@ -4840,7 +4860,7 @@ function refundPage(user = null) {
           <h2>14. Contact</h2>
           <p>Need help?</p>
           <ul>
-            <li>📧 <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></li>
+            <li>📧 <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
             <li>📞 +37257052072</li>
           </ul>
         </section>
@@ -4959,7 +4979,7 @@ function contactPage(user = null) {
           <section class="mp-contact-left">
             <h1>Talk to WizardzWork</h1>
             <p>We respond within a few hours on weekdays.</p>
-            <p><strong>Email:</strong> <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></p>
+            <p><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></p>
             <p><strong>Phone:</strong> <a href="tel:+919999999999">+91 9999999999</a></p>
             <iframe src="https://www.google.com/maps?q=Bangalore&output=embed" width="100%" height="260" style="border:0;border-radius:14px;margin-top:16px" loading="lazy" title="WizardzWork HQ"></iframe>
           </section>
@@ -5003,7 +5023,7 @@ function servicesPage(user = null) {
         <section class="mp-prose">
           <h3>Need to reach us?</h3>
           <p>Admin: <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></p>
-          <p>Support: <a href="mailto:support@wizardzwork.com">support@wizardzwork.com</a></p>
+          <p>Support: <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></p>
         </section>
       </main>
     `

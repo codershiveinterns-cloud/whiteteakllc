@@ -7,16 +7,20 @@ try {
 }
 
 function getMailerConfig() {
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM } = process.env;
-  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !SMTP_FROM || !nodemailer) {
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_REPLY_TO } = process.env;
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !nodemailer) {
     return null;
   }
+  // Default sender: "WizardzWork Support <admin@wizardzwork.com>" if SMTP_FROM not set.
+  const from = SMTP_FROM || `WizardzWork Support <admin@wizardzwork.com>`;
+  const replyTo = SMTP_REPLY_TO || "admin@wizardzwork.com";
   return {
     host: SMTP_HOST,
     port: Number(SMTP_PORT),
     secure: Number(SMTP_PORT) === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
-    from: SMTP_FROM
+    from,
+    replyTo
   };
 }
 
@@ -44,17 +48,22 @@ async function sendOtpEmail(email, otp, verifyLink = "") {
 
   await transporter.sendMail({
     from: config.from,
+    replyTo: config.replyTo,
     to: email,
     subject: "Your WizardzWork verification code",
-    text: `Your WizardzWork OTP is ${otp}. It is valid for 10 minutes.${linkBlockText}`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px">
-             <h2 style="color:#111">Welcome to WizardzWork</h2>
-             <p>Your verification code is:</p>
-             <p style="font-size:32px;letter-spacing:6px;font-weight:700;background:#f4f4f6;padding:16px 24px;border-radius:8px;text-align:center;color:#111">${otp}</p>
-             <p>This code is valid for 10 minutes.</p>
+    text: `Your WizardzWork OTP is ${otp}. It is valid for 10 minutes.${linkBlockText}\n\n— WizardzWork Team (admin@wizardzwork.com)`,
+    html: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;padding:24px">
+             <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+               <div style="width:36px;height:36px;border-radius:8px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;font-weight:800;display:inline-flex;align-items:center;justify-content:center;font-size:18px">W</div>
+               <strong style="font-size:18px;color:#111">WizardzWork</strong>
+             </div>
+             <h2 style="color:#111;margin:8px 0 4px">Welcome to WizardzWork</h2>
+             <p style="margin:8px 0 14px;color:#333">Your verification code is:</p>
+             <p style="font-size:32px;letter-spacing:6px;font-weight:700;background:#f4f4f6;padding:16px 24px;border-radius:8px;text-align:center;color:#111;margin:0">${otp}</p>
+             <p style="margin:14px 0 8px;color:#444">This code is valid for 10 minutes.</p>
              ${linkBlockHtml}
              <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
-             <p style="font-size:12px;color:#888">If you didn't request this, you can safely ignore this email.</p>
+             <p style="font-size:12px;color:#888">If you didn't request this, you can safely ignore this email. For help, reply to this email or contact <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a>.</p>
            </div>`
   });
 
