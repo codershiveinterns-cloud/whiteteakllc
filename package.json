@@ -1,7 +1,7 @@
 {
-  "name": "ecomm",
+  "name": "wizardzwork",
   "version": "1.0.0",
-  "description": "",
+  "description": "WizardzWork e-commerce storefront",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -13,6 +13,7 @@
   "type": "commonjs",
   "dependencies": {
     "better-sqlite3": "^12.9.0",
+    "firebase-admin": "^12.7.0",
     "mongodb": "^7.1.1",
     "nodemailer": "^8.0.5",
     "pdf-parse": "^2.4.5",

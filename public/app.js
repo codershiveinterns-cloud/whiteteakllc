@@ -33,7 +33,7 @@
     initNavDrawer();
   }
 
-  const CART_KEY = "electrohub-cart";
+  const CART_KEY = "wizardzwork-cart";
 
   function readCart() {
     try {
@@ -425,7 +425,7 @@
     const btn = wrapper.querySelector("[data-pdp-pin-check]");
     const out = document.querySelector("[data-pdp-pin-result]");
     if (!input || !btn || !out) return;
-    const saved = localStorage.getItem("mp-delivery-pin");
+    const saved = localStorage.getItem("ww-delivery-pin");
     if (saved) input.value = saved;
     function check() {
       const v = (input.value || "").trim();
@@ -435,7 +435,7 @@
         return;
       }
       const eta = 3 + (Number(v[0]) % 4);
-      localStorage.setItem("mp-delivery-pin", v);
+      localStorage.setItem("ww-delivery-pin", v);
       out.innerHTML = "✓ Delivery available to <strong>" + v + "</strong>. Estimated delivery in <strong>" + eta + "–" + (eta + 2) + " days</strong>. Free shipping.";
       out.style.color = "#047857";
     }
@@ -885,7 +885,7 @@
     if (!body || !empty) return;
     function refresh() {
       try {
-        var cart = JSON.parse(localStorage.getItem("electrohub-cart") || "[]");
+        var cart = JSON.parse(localStorage.getItem("wizardzwork-cart") || "[]");
         if (!cart.length) {
           empty.hidden = false;
           body.style.display = "none";
@@ -901,11 +901,11 @@
     mo.observe(body, { childList: true, subtree: true });
   })();
 
-  // Guest cart mirror — mirrors electrohub-cart localStorage to eh_guest_cart when logged-out.
+  // Guest cart mirror — mirrors wizardzwork-cart localStorage to ww_guest_cart when logged-out.
   (function ehGuestCart() {
     var loggedIn = document.body && document.body.getAttribute("data-logged-in") === "true";
-    var CART_KEY = "electrohub-cart";
-    var GUEST_KEY = "eh_guest_cart";
+    var CART_KEY = "wizardzwork-cart";
+    var GUEST_KEY = "ww_guest_cart";
     function sync() {
       if (loggedIn) return;
       try {
@@ -988,7 +988,7 @@
       event.stopImmediatePropagation();
       hideError();
       var cart = [];
-      try { cart = JSON.parse(localStorage.getItem("electrohub-cart") || "[]"); } catch (_) {}
+      try { cart = JSON.parse(localStorage.getItem("wizardzwork-cart") || "[]"); } catch (_) {}
       if (!cart.length) { showError("Your cart is empty."); return; }
 
       var fd = new FormData(form);
@@ -1026,7 +1026,7 @@
         amount: orderResp.amount,
         currency: orderResp.currency || "INR",
         order_id: orderResp.orderId,
-        name: "MAPLE",
+        name: "WizardzWork",
         description: "Order payment",
         prefill: {
           name: shipping.customerName || "",
@@ -1047,7 +1047,7 @@
             });
             var vjson = await vr.json();
             if (!vr.ok) throw new Error(vjson.error || "Verification failed");
-            try { localStorage.setItem("electrohub-cart", "[]"); } catch (_) {}
+            try { localStorage.setItem("wizardzwork-cart", "[]"); } catch (_) {}
             window.location.href = vjson.redirect || ("/order-success/" + encodeURIComponent(vjson.orderCode));
           } catch (err) {
             showError("Payment verification failed: " + err.message);
@@ -1067,7 +1067,7 @@
     }, true); // capture phase
   })();
 
-  /* ==== MAPLE: address dialog ==== */
+  /* ==== WizardzWork: address dialog ==== */
   (function () {
     var openBtns = document.querySelectorAll("[data-mp-addr-open]");
     var dialog = document.querySelector("[data-mp-addr-dialog]");
@@ -1140,11 +1140,11 @@
     }
   })();
 
-  /* ==== MAPLE: theme swatch picker ==== */
+  /* ==== WizardzWork: theme swatch picker ==== */
   (function () {
     var swatches = document.querySelectorAll("[data-mp-theme-swatch]");
     if (!swatches.length) return;
-    var current = window.__MAPLE_THEME__ || "snow";
+    var current = window.__WW_THEME__ || "snow";
     swatches.forEach(function (btn) {
       if (btn.getAttribute("data-mp-theme-swatch") === current) {
         btn.classList.add("is-active");
@@ -1158,7 +1158,7 @@
     });
   })();
 
-  /* ==== MAPLE: newsletter ==== */
+  /* ==== WizardzWork: newsletter ==== */
   (function () {
     var form = document.querySelector("[data-mp-newsletter]");
     if (!form) return;
@@ -1172,7 +1172,7 @@
     });
   })();
 
-  /* ==== MAPLE: contact form + support token ==== */
+  /* ==== WizardzWork: contact form + support token ==== */
   (function () {
     var form = document.querySelector("[data-mp-contact-form]");
     if (!form) return;
@@ -1199,7 +1199,7 @@
     });
   })();
 
-  /* ==== MAPLE: admin upload dropzone + paste + word counter ==== */
+  /* ==== WizardzWork: admin upload dropzone + paste + word counter ==== */
   (function () {
     var form = document.querySelector("[data-mp-add-product]");
     if (!form) return;
@@ -1278,7 +1278,7 @@
     });
   })();
 
-  /* ==== MAPLE: checkout email verification + payment ==== */
+  /* ==== WizardzWork: checkout email verification + payment ==== */
   (function () {
     var shell = document.querySelector(".cr-co-shell");
     if (!shell) return;
@@ -1341,7 +1341,7 @@
       e.preventDefault(); e.stopPropagation();
       var data = Object.fromEntries(new FormData(form).entries());
       var cart = [];
-      try { cart = JSON.parse(localStorage.getItem("electrohub-cart") || "[]"); } catch (_) {}
+      try { cart = JSON.parse(localStorage.getItem("wizardzwork-cart") || "[]"); } catch (_) {}
       var items = cart.map(function (c) { return { id: c.id, quantity: c.quantity }; });
       var order = { customerName: data.customerName, email: data.email, phone: data.phone, address: data.address, city: data.city, state: data.state, pincode: data.pincode, items: items };
       var endpoint = payVal === "stripe" ? "/api/payment/stripe/create-session"
@@ -1351,7 +1351,7 @@
         .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (res) {
           if (res.ok && res.j.ok) {
-            try { localStorage.setItem("electrohub-cart", "[]"); } catch (_) {}
+            try { localStorage.setItem("wizardzwork-cart", "[]"); } catch (_) {}
             location.href = res.j.checkoutUrl || res.j.redirect;
           } else { setStatus(res.j.error || "Payment failed", true); }
         });

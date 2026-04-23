@@ -1,11 +1,14 @@
 const crypto = require("crypto");
 let MongoClient;
+let fbMirror = null;
 
 try {
   ({ MongoClient } = require("mongodb"));
 } catch {
   MongoClient = null;
 }
+
+try { fbMirror = require("./firebase-mirror"); } catch { fbMirror = null; }
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
   const derived = crypto.scryptSync(password, salt, 64).toString("hex");
@@ -167,6 +170,7 @@ class MongoMirrorStore {
         { upsert: true }
       );
     }
+    if (fbMirror) { try { await fbMirror.mirrorUser(user); } catch (_) {} }
     return user;
   }
 
@@ -178,6 +182,12 @@ class MongoMirrorStore {
         { $set: { verified: 1 } }
       );
     }
+    if (fbMirror) {
+      try {
+        const user = await this.sqliteStore.getUserByEmail(email);
+        if (user) await fbMirror.mirrorUser(user);
+      } catch (_) { /* mirror is best-effort */ }
+    }
   }
 
   async updateUserPassword(email, newPassword) {
@@ -188,6 +198,7 @@ class MongoMirrorStore {
         { $set: { password_hash: passwordHash } }
       );
     }
+    if (fbMirror) { try { await fbMirror.mirrorPasswordReset(email); } catch (_) {} }
     return passwordHash;
   }
 
@@ -200,6 +211,16 @@ class MongoMirrorStore {
         expires_at: payload.expiresAt,
         created_at: new Date().toISOString()
       });
+    }
+    if (fbMirror) {
+      try {
+        await fbMirror.mirrorOtpLog({
+          email: payload.email.toLowerCase(),
+          purpose: payload.purpose,
+          expires_at: payload.expiresAt,
+          created_at: new Date().toISOString()
+        });
+      } catch (_) { /* mirror is best-effort */ }
     }
   }
 

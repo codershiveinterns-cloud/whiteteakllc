@@ -2623,7 +2623,7 @@ body.mp-nav-open { overflow: hidden; }
 
 
 /* ========================================================================
-   MAPLE BRAND HEADER + ADDRESS WIDGET
+   WizardzWork BRAND HEADER + ADDRESS WIDGET
    ======================================================================== */
 .mp-brand-mark { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:8px; background:var(--accent); color:#fff; font-weight:800; margin-right:8px; }
 .mp-addr-btn { background:transparent; border:1px solid var(--line); padding:6px 10px; border-radius:999px; cursor:pointer; font:inherit; color:var(--text); font-size:0.82rem; }
@@ -2646,7 +2646,7 @@ body.mp-nav-open { overflow: hidden; }
 }
 
 /* ========================================================================
-   MAPLE HOMEPAGE
+   WizardzWork HOMEPAGE
    ======================================================================== */
 .mp-section { padding:42px 5%; }
 .mp-section-head { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px; }
@@ -2690,7 +2690,7 @@ body.mp-nav-open { overflow: hidden; }
 .mp-news-msg { color:#10b981; min-height:1.2em; margin:0; }
 
 /* ========================================================================
-   MAPLE PAGES
+   WizardzWork PAGES
    ======================================================================== */
 .mp-page { padding:0 5% 60px; }
 .mp-page-hero { padding:50px 0 22px; max-width:780px; }
@@ -2743,7 +2743,7 @@ body.mp-nav-open { overflow: hidden; }
 @media (max-width:720px) { .mp-store-grid, .mp-contact-grid { grid-template-columns:1fr; } }
 
 /* ========================================================================
-   MAPLE ADMIN UPLOAD
+   WizardzWork ADMIN UPLOAD
    ======================================================================== */
 .mp-drop-zone { border:2px dashed var(--line); border-radius:12px; padding:22px; text-align:center; cursor:pointer; background:var(--surface-alt, #fafbfc); transition:background .15s ease; }
 .mp-drop-zone.is-drag { background:#eff6ff; border-color:#3b82f6; }
@@ -2759,7 +2759,7 @@ body.mp-nav-open { overflow: hidden; }
 .mp-theme-pick select { padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--text); }
 
 /* ========================================================================
-   MAPLE CHECKOUT VERIFY + PAY
+   WizardzWork CHECKOUT VERIFY + PAY
    ======================================================================== */
 .mp-verify-card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px; margin:8px 0 16px; }
 .mp-verify-card label { display:block; margin-bottom:8px; }
@@ -2769,11 +2769,11 @@ body.mp-nav-open { overflow: hidden; }
 .mp-verify-status.is-error { color:var(--danger); }
 .mp-wise-box { background:#fff7e6; border:1px solid #ffd591; border-radius:10px; padding:14px; margin-top:8px; }
 
-/* hide legacy site-footer (replaced by maple footer site-wide) */
+/* hide legacy site-footer (replaced by wizardzwork footer site-wide) */
 body .site-footer { display:none !important; }
 
 /* ========================================================================
-   MAPLE REDESIGN -- theme contrast, PDP v2, hero v2, account, wishlist
+   WizardzWork REDESIGN -- theme contrast, PDP v2, hero v2, account, wishlist
    ======================================================================== */
 
 /* Global theme-aware overrides */
