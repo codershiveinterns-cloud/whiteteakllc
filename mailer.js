@@ -8,16 +8,20 @@ try {
 
 function getMailerConfig() {
   const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_REPLY_TO } = process.env;
-  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !nodemailer) {
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !nodemailer) {
     return null;
   }
+  // Tolerate bad SMTP_PORT values (e.g. someone pasted the host into the port
+  // field in a dashboard). Fall back to 465 if the value isn't a positive number.
+  let port = Number(SMTP_PORT);
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) port = 465;
   // Default sender: "WizardzWork Support <admin@wizardzwork.com>" if SMTP_FROM not set.
   const from = SMTP_FROM || `WizardzWork Support <admin@wizardzwork.com>`;
   const replyTo = SMTP_REPLY_TO || "admin@wizardzwork.com";
   return {
     host: SMTP_HOST,
-    port: Number(SMTP_PORT),
-    secure: Number(SMTP_PORT) === 465,
+    port,
+    secure: port === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
     from,
     replyTo
@@ -30,11 +34,18 @@ async function sendOtpEmail(email, otp, verifyLink = "") {
     return { sent: false, mode: "dev", otp, verifyLink };
   }
 
+  // Namecheap shared hosting issues one wildcard TLS cert (*.web-hosting.com)
+  // for the cPanel server, not a per-domain cert. Connecting via
+  // mail.wizardzwork.com fails strict hostname verification even though the
+  // connection is still encrypted. Relax hostname verification unless the
+  // operator explicitly opts into strict mode via SMTP_TLS_STRICT=true.
+  const relaxTls = String(process.env.SMTP_TLS_STRICT || "").toLowerCase() !== "true";
   const transporter = nodemailer.createTransport({
     host: config.host,
     port: config.port,
     secure: config.secure,
-    auth: config.auth
+    auth: config.auth,
+    tls: relaxTls ? { rejectUnauthorized: false } : undefined
   });
 
   const linkBlockText = verifyLink

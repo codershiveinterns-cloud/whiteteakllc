@@ -5243,13 +5243,17 @@ async function handleRequest(req, res) {
     let nm = null;
     try { nm = require("nodemailer"); out.nodemailer = true; } catch (e) { out.connect_error = "nodemailer missing: " + e.message; }
     if (nm && process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-      const port = Number(process.env.SMTP_PORT || 465);
+      let port = Number(process.env.SMTP_PORT);
+      if (!Number.isFinite(port) || port <= 0) port = 465;
+      const relaxTls = String(process.env.SMTP_TLS_STRICT || "").toLowerCase() !== "true";
       const transporter = nm.createTransport({
         host: process.env.SMTP_HOST,
         port,
         secure: port === 465,
-        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+        tls: relaxTls ? { rejectUnauthorized: false } : undefined
       });
+      out.port_resolved = port;
       try {
         await transporter.verify();
         out.connect_ok = true;
