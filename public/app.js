@@ -184,7 +184,9 @@
         customerName: formData.get("customerName"),
         email: formData.get("email"),
         phone: formData.get("phone"),
-        address: formData.get("address"),
+        // Fold country (when present) into the stored address so we don't have
+        // to migrate the orders table schema.
+        address: (formData.get("country") ? ((formData.get("address") || "") + ", " + formData.get("country")) : formData.get("address")),
         city: formData.get("city"),
         state: formData.get("state"),
         pincode: formData.get("pincode"),
@@ -576,6 +578,7 @@
     const nextBtn = form.querySelector("[data-cr-next]");
     if (!nextBtn) return;
     const required = ["customerName", "email", "phone", "address", "city", "state", "pincode"];
+    if (form.querySelector('[name="country"]')) required.unshift("country");
     nextBtn.addEventListener("click", (e) => {
       const data = new FormData(form);
       const missing = [];
@@ -583,8 +586,8 @@
         const v = (data.get(name) || "").toString().trim();
         if (!v) { missing.push(name); continue; }
         if (name === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) missing.push("valid email");
-        if (name === "phone" && !/^[+\d][\d\s-]{6,}$/.test(v)) missing.push("valid phone");
-        if (name === "pincode" && !/^\d{4,8}$/.test(v)) missing.push("valid pincode");
+        if (name === "phone" && !/^[+\d][\d\s\-()]{5,}$/.test(v)) missing.push("valid phone");
+        if (name === "pincode" && !/^[A-Za-z0-9][A-Za-z0-9 \-]{1,11}$/.test(v)) missing.push("valid postal/ZIP code");
       }
       if (missing.length) {
         e.preventDefault();
@@ -992,11 +995,12 @@
       if (!cart.length) { showError("Your cart is empty."); return; }
 
       var fd = new FormData(form);
+      var country = fd.get("country") || "";
       var shipping = {
         customerName: fd.get("customerName"),
         email: fd.get("email"),
         phone: fd.get("phone"),
-        address: fd.get("address"),
+        address: country ? ((fd.get("address") || "") + ", " + country) : fd.get("address"),
         city: fd.get("city"),
         state: fd.get("state"),
         pincode: fd.get("pincode"),

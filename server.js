@@ -12,6 +12,15 @@ const { openDatabase } = require("./db-shim");
 
 const { createDataLayer, verifyPassword, hashPassword } = require("./data-layer");
 const { CITIES: INDIAN_CITIES } = require("./data/india-cities.js");
+
+// Module-scope constants used by both layout() address dialog and checkoutPage()
+const INDIAN_STATES = [
+  "Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","Goa","Gujarat","Haryana","Himachal Pradesh","Jharkhand","Karnataka","Kerala","Madhya Pradesh","Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West Bengal","Delhi","Jammu and Kashmir","Ladakh","Puducherry","Chandigarh","Andaman and Nicobar Islands","Dadra and Nagar Haveli and Daman and Diu","Lakshadweep"
+];
+// ISO-sorted list of countries commonly supported for e-commerce shipping.
+const COUNTRIES = [
+  "Afghanistan","Albania","Algeria","Andorra","Angola","Argentina","Armenia","Australia","Austria","Azerbaijan","Bahamas","Bahrain","Bangladesh","Barbados","Belarus","Belgium","Belize","Benin","Bhutan","Bolivia","Bosnia and Herzegovina","Botswana","Brazil","Brunei","Bulgaria","Burkina Faso","Burundi","Cambodia","Cameroon","Canada","Cape Verde","Central African Republic","Chad","Chile","China","Colombia","Comoros","Costa Rica","Croatia","Cuba","Cyprus","Czechia","Denmark","Djibouti","Dominica","Dominican Republic","Ecuador","Egypt","El Salvador","Estonia","Eswatini","Ethiopia","Fiji","Finland","France","Gabon","Gambia","Georgia","Germany","Ghana","Greece","Grenada","Guatemala","Guinea","Guyana","Haiti","Honduras","Hong Kong","Hungary","Iceland","India","Indonesia","Iraq","Ireland","Israel","Italy","Jamaica","Japan","Jordan","Kazakhstan","Kenya","Kuwait","Kyrgyzstan","Laos","Latvia","Lebanon","Lesotho","Liberia","Libya","Liechtenstein","Lithuania","Luxembourg","Macao","Madagascar","Malawi","Malaysia","Maldives","Mali","Malta","Mauritania","Mauritius","Mexico","Moldova","Monaco","Mongolia","Montenegro","Morocco","Mozambique","Myanmar","Namibia","Nepal","Netherlands","New Zealand","Nicaragua","Niger","Nigeria","North Macedonia","Norway","Oman","Pakistan","Panama","Papua New Guinea","Paraguay","Peru","Philippines","Poland","Portugal","Qatar","Romania","Russia","Rwanda","San Marino","Saudi Arabia","Senegal","Serbia","Seychelles","Sierra Leone","Singapore","Slovakia","Slovenia","Somalia","South Africa","South Korea","Spain","Sri Lanka","Sudan","Suriname","Sweden","Switzerland","Taiwan","Tajikistan","Tanzania","Thailand","Togo","Trinidad and Tobago","Tunisia","Turkey","Turkmenistan","Uganda","Ukraine","United Arab Emirates","United Kingdom","United States","Uruguay","Uzbekistan","Venezuela","Vietnam","Yemen","Zambia","Zimbabwe"
+];
 let fbMirror = null; try { fbMirror = require("./firebase-mirror"); fbMirror.init(); } catch (_) { fbMirror = null; }
 const { sendOtpEmail } = require("./mailer");
 
@@ -1057,7 +1066,6 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
     ? `📍 ${escapeHtml(userAddress.city || "")}, ${escapeHtml(userAddress.state || "")} – ${escapeHtml(userAddress.pin)}`
     : `📍 Set delivery location`;
   const themeClass = `theme-${(theme || "snow").replace(/[^a-z]/gi, "") || "snow"}`;
-  const INDIAN_STATES = ["Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","Goa","Gujarat","Haryana","Himachal Pradesh","Jharkhand","Karnataka","Kerala","Madhya Pradesh","Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West Bengal","Delhi","Jammu and Kashmir","Ladakh","Puducherry","Chandigarh","Andaman and Nicobar Islands","Dadra and Nagar Haveli and Daman and Diu","Lakshadweep"];
   return `<!DOCTYPE html>
   <html lang="en">
   <head>
@@ -1154,19 +1162,25 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
       <dialog class="mp-addr-dialog" data-mp-addr-dialog>
         <form method="dialog" class="mp-addr-form" data-mp-addr-form>
           <h3>Choose delivery location</h3>
-          <label>District / City / Town
-            <input name="city" list="mp-cities-list-dialog" required value="${escapeHtml(userAddress?.city || "")}" data-mp-city-input>
-          </label>
-          <label>State
-            <select name="state" required data-mp-state-input>
-              <option value="">Select state</option>
-              ${INDIAN_STATES.map(s => `<option ${userAddress?.state === s ? "selected" : ""}>${s}</option>`).join("")}
+          <label>Country / Region
+            <select name="country" required data-mp-country-input>
+              <option value="">Select country</option>
+              ${COUNTRIES.map(c => `<option ${userAddress?.country === c ? "selected" : ""}>${c}</option>`).join("")}
             </select>
           </label>
-          <label>PIN Code<input name="pin" list="mp-pins-list-dialog" pattern="\\d{6}" maxlength="6" required value="${escapeHtml(userAddress?.pin || "")}" data-mp-pin-input></label>
+          <label>City / Town
+            <input name="city" list="mp-cities-list-dialog" required value="${escapeHtml(userAddress?.city || "")}" data-mp-city-input>
+          </label>
+          <label>State / Province / Region
+            <input name="state" list="mp-states-list-dialog" required value="${escapeHtml(userAddress?.state || "")}" data-mp-state-input placeholder="State or province">
+          </label>
+          <label>Postal / ZIP code
+            <input name="pin" list="mp-pins-list-dialog" pattern=".{2,12}" maxlength="12" required value="${escapeHtml(userAddress?.pin || "")}" data-mp-pin-input placeholder="e.g. 110001, 10001, SW1A 1AA">
+          </label>
           <datalist id="mp-cities-list-dialog"></datalist>
+          <datalist id="mp-states-list-dialog">${INDIAN_STATES.map(s => `<option>${s}</option>`).join("")}</datalist>
           <datalist id="mp-pins-list-dialog"></datalist>
-          <p style="margin:-4px 0 8px;font-size:12px;color:#6b7280">Start typing a city — state and pincode options will auto-fill.</p>
+          <p style="margin:-4px 0 8px;font-size:12px;color:#6b7280">Free shipping worldwide · Start typing a city and we'll suggest state/pincode for Indian locations.</p>
           <div class="mp-addr-actions">
             <button type="button" data-mp-addr-cancel class="mp-ghost">Cancel</button>
             <button type="submit" class="mp-primary">Save</button>
@@ -3480,25 +3494,33 @@ function checkoutPage(user = null) {
             <h2>Shipping Details</h2>
             <label>Full name<input name="customerName" value="${escapeHtml(user?.name || "")}" required minlength="2"></label>
             <label>Email<input type="email" name="email" value="${escapeHtml(user?.email || "")}" required></label>
-            <label>Phone<input name="phone" required pattern="[+\\d][\\d\\s-]{6,}" placeholder="e.g. +91 98765 43210"></label>
-            <label>Address (house no., street, area)<input name="address" required minlength="5"></label>
+            <label>Phone<input name="phone" required pattern="[+\\d][\\d\\s\\-()]{6,}" placeholder="e.g. +1 555 123 4567"></label>
+            <label>Address (house no., street, apartment)<input name="address" required minlength="5"></label>
             <div class="cr-co-grid-2">
-              <label>City / District / Town
-                <input name="city" list="mp-cities-list" required autocomplete="address-level2" data-mp-city-input>
-              </label>
-              <label>State
-                <select name="state" required data-mp-state-input>
-                  <option value="">Select state</option>
-                  ${INDIAN_STATES.map(s => `<option>${s}</option>`).join("")}
+              <label>Country / Region
+                <select name="country" required data-mp-country-input>
+                  <option value="">Select country</option>
+                  ${COUNTRIES.map(c => `<option ${c === "India" ? "" : ""}>${c}</option>`).join("")}
                 </select>
               </label>
+              <label>City / Town
+                <input name="city" list="mp-cities-list" required autocomplete="address-level2" data-mp-city-input placeholder="Your city">
+              </label>
             </div>
-            <label>Pincode
-              <input name="pincode" list="mp-pins-list" required pattern="\\d{4,8}" maxlength="8" inputmode="numeric" data-mp-pin-input>
-            </label>
+            <div class="cr-co-grid-2">
+              <label>State / Province / Region
+                <input name="state" list="mp-states-list" required autocomplete="address-level1" data-mp-state-input placeholder="State or province">
+              </label>
+              <label>Postal / ZIP code
+                <input name="pincode" list="mp-pins-list" required pattern=".{2,12}" maxlength="12" data-mp-pin-input placeholder="e.g. 110001, 10001, SW1A 1AA">
+              </label>
+            </div>
             <datalist id="mp-cities-list"></datalist>
+            <datalist id="mp-states-list">
+              ${INDIAN_STATES.map(s => `<option>${s}</option>`).join("")}
+            </datalist>
             <datalist id="mp-pins-list"></datalist>
-            <p class="cr-co-hint" style="margin:-4px 0 8px;font-size:12px;color:#6b7280">Start typing a city — state and pincode options will appear automatically.</p>
+            <p class="cr-co-hint" style="margin:-4px 0 8px;font-size:12px;color:#6b7280">Free shipping worldwide · No taxes · 3–10 day delivery</p>
             <div class="cr-co-actions">
               <button type="button" class="cr-co-next" data-cr-next>Continue to Payment</button>
             </div>
