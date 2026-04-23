@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node --check server.js)"
+      "Bash(node --check server.js)",
+      "Bash(node scripts/apply-product-images.js)",
+      "Bash(awk '{print $2\": \"$1\" bytes\"}')",
+      "Bash(node scripts/apply-product-images.js --dry)",
+      "Bash(awk -F',' 'NR>1 {print $5}' data/product-images.csv)",
+      "Bash(awk -F',' 'NR>1 && $5!=\"\" {print $5}' data/product-images.csv)",
+      "Bash(awk '$1>1')",
+      "Bash(awk -F',' 'NR>1 && $5!=\"\" {print NR\": \"$1\"  ->  \"$5}' data/product-images.csv)",
+      "Bash(awk '{print $1}')"
     ]
   }
 }

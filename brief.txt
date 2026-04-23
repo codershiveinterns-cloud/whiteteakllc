@@ -183,3 +183,610 @@ while delivering immediate business value in its initial version.
 
 -- 6 of 6 --
 
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Terms & Conditions
+
+Last updated: April 2026
+
+Welcome to MAPLE, operated by SynapseEngine OÜ ("Company", "we", "us", or "our"). These Terms & Conditions govern your use of our website, mobile interfaces, and services (collectively, the “Services”).
+
+1. Acceptance of Terms
+
+By accessing or using MAPLE, you agree to be bound by these Terms & Conditions and our Privacy Policy. If you do not agree, please do not use our Services.
+
+We may update these Terms at any time. Continued use after changes constitutes acceptance.
+
+2. Company Information
+Legal Entity: SynapseEngine OÜ
+Registered Country: Estonia
+Registered Address: Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115
+Phone Number: +37257052072
+Contact Email: support@maple.com
+Admin Email: admin@MapleCoreInc.com
+3. Eligibility
+
+You must be at least 18 years old and capable of entering a legally binding contract under applicable law.
+
+By using MAPLE, you confirm:
+
+All information provided is accurate
+You are purchasing for personal use unless agreed otherwise
+4. Account Responsibility
+
+You are responsible for maintaining the confidentiality of your account credentials and for all activities under your account.
+
+We may suspend or terminate accounts involved in:
+
+Fraud
+Policy abuse
+Unauthorized resale
+5. Products & Orders
+Orders are offers to purchase and are accepted only upon dispatch
+We reserve the right to cancel orders due to:
+Pricing errors
+Stock issues
+Suspected fraud
+
+Cancelled orders will receive a full refund.
+
+6. Pricing & Taxes
+Prices are listed in INR (₹)
+Inclusive of applicable GST unless stated otherwise
+Prices may change without prior notice
+7. Payments
+
+Payments are securely processed through third-party providers, including Viva Wallet.
+
+By making a payment, you agree:
+
+You are authorized to use the payment method
+Transactions may be subject to fraud checks
+Suspicious transactions may be declined or cancelled
+
+Supported payment methods may include:
+
+Credit/Debit Cards
+UPI
+Digital wallets
+8. Order Cancellation
+Orders can be cancelled before dispatch
+Once shipped, cancellation may not be possible
+Refunds are processed as per our refund policy
+9. Shipping & Delivery
+Delivery available across eligible locations in India
+Delivery timelines are estimates
+Risk transfers upon delivery
+
+Customers should inspect packages before accepting.
+
+10. Returns & Refunds
+
+Eligible returns within 30 days of delivery must meet:
+
+Unused condition
+Original packaging
+All accessories included
+Non-returnable items:
+Opened software
+Hygiene-sensitive items (e.g., earbuds)
+Customized products
+Refund Policy:
+Refunds processed within 5–10 business days
+Credited to original payment method
+Timelines may vary by bank/payment provider
+11. Failed Transactions
+
+If payment is deducted but fails:
+
+Refund processed within 5–7 business days
+Contact support if delayed
+12. Chargebacks & Fraud
+
+We reserve the right to:
+
+Investigate disputed payments
+Suspend accounts involved in fraudulent or abusive chargebacks
+13. Intellectual Property
+
+All content on MAPLE is owned or licensed by SynapseEngine OÜ and protected under applicable laws.
+
+Unauthorized use is prohibited.
+
+14. Prohibited Use
+
+Users must not:
+
+Engage in illegal activities
+Attempt to hack or disrupt the platform
+Conduct fraudulent transactions
+Resell without authorization
+15. Limitation of Liability
+
+To the maximum extent permitted by law:
+
+Liability is limited to the amount paid for the order
+No liability for indirect or consequential damages
+16. Indemnification
+
+You agree to indemnify and hold harmless SynapseEngine OÜ from claims arising due to:
+
+Misuse of services
+Violation of these Terms
+17. Privacy
+
+Use of MAPLE is also governed by our Privacy Policy.
+
+18. Governing Law & Jurisdiction
+
+These Terms are governed by the laws of India.
+
+All disputes fall under the jurisdiction of:
+Courts in Bengaluru, Karnataka
+
+Parties agree to attempt mediation before litigation.
+
+19. Grievance Officer (India Compliance)
+
+Name: [Add Name]
+Email: [Add Email]
+Response Time: 7–15 business days
+
+20. Contact Us
+
+For support or inquiries:
+
+📧 support@maple.com
+
+📧 admin@MapleCoreInc.com
+
+📞 +37257052072
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Privacy Policy
+
+Last updated: April 2026
+
+Your data, handled with the same care you'd want for your own.
+
+1. Company Information
+
+This Privacy Policy applies to services operated by:
+
+SynapseEngine OÜ
+Registered Address: Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115, Estonia
+Phone: +37257052072
+Email: support@maple.com
+
+2. Data We Collect
+
+We collect:
+
+Information you provide:
+Name
+Email address
+Phone number
+Shipping and billing address
+Order history
+Automatically collected data:
+IP address
+Device/browser information
+Session identifiers
+Referrer URLs
+
+Payment card details are processed securely by third-party PCI-compliant providers such as Viva Wallet. We do not store full card details.
+
+3. How We Use Your Data
+
+We use your data to:
+
+Process and deliver orders
+Provide customer support
+Send transactional updates (order, delivery, OTP)
+Personalise recommendations
+Prevent fraud and abuse
+Improve our services
+
+We do not sell your personal data.
+
+4. Legal Basis for Processing
+
+We process your data based on:
+
+Contractual necessity (order fulfilment)
+Legal obligations (tax, compliance)
+Legitimate interests (fraud detection, analytics)
+Consent (marketing and cookies where applicable)
+5. Cookies
+
+We use cookies for:
+
+Login/authentication
+Cart functionality
+Preferences
+
+Optional analytics cookies help us improve our platform.
+
+You can manage cookies via browser settings or consent tools. Disabling cookies may affect functionality.
+
+6. Marketing Communications
+
+With your consent, we may send:
+
+Promotional emails
+Offers and updates
+
+You can opt out anytime using the unsubscribe link or by contacting us.
+
+7. Third-Party Sharing
+
+We share data only with trusted partners:
+
+Payment providers
+Logistics partners
+Email/SMS services
+Cloud infrastructure providers
+
+All partners operate under strict data-processing agreements.
+
+8. International Data Transfers
+
+As a global business, your data may be processed outside your country, including in Estonia.
+
+We ensure appropriate safeguards are in place, such as:
+
+Secure infrastructure
+Contractual protections
+Trusted service providers
+9. Security
+
+We implement:
+
+TLS encryption for data in transit
+Secure password hashing
+Access control policies
+Activity logging
+
+However, no system is completely secure.
+
+10. Data Retention
+
+We retain:
+
+Orders and invoices: up to 7 years (legal requirement)
+Account data: until deletion request or inactivity
+
+Inactive accounts may be archived or removed.
+
+11. Your Rights
+
+You have the right to:
+
+Access your data
+Correct inaccuracies
+Request deletion
+Request data portability
+
+Contact: support@maple.com
+
+Response time: within 30 days
+
+12. Children’s Privacy
+
+Our services are not intended for children under 13. We do not knowingly collect such data.
+
+13. Data Breach Notification
+
+In case of a data breach, we will notify affected users and authorities where required by law.
+
+14. Changes to This Policy
+
+We may update this policy periodically. Significant changes will be communicated via:
+
+Website notice
+Email (if applicable)
+15. Contact & Data Protection Officer
+
+Data Protection Officer: admin@MapleCoreInc.com
+
+Support: support@maple.com
+
+Phone: +37257052072
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Disclaimer
+
+Last updated: April 2026
+
+Important notes about the information shown on MAPLE.
+
+1. Company Information
+
+This website is operated by:
+
+SynapseEngine OÜ
+Registered Address: Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115, Estonia
+Phone: +37257052072
+Email: support@maple.com
+
+2. Product Information
+
+Product descriptions, images, specifications, and features on MAPLE are based on manufacturer data, official materials, and internal editorial inputs.
+
+While we aim for accuracy:
+
+Manufacturers may change specifications without notice
+Region-specific variants may differ
+Box contents may vary
+
+For final and binding details, always refer to:
+
+Official brand website
+Physical product packaging
+3. Pricing Accuracy
+
+We strive to maintain accurate pricing at all times.
+
+However, in case of:
+
+Typographical errors
+System glitches
+Incorrect currency conversions
+
+MAPLE reserves the right to:
+
+Cancel affected orders
+Refuse processing
+Issue full refunds where applicable
+4. Product Availability
+
+All products are subject to availability.
+
+We reserve the right to:
+
+Discontinue products
+Limit quantities
+Cancel orders due to stock issues
+5. Third-Party Links
+
+MAPLE may include links to third-party websites such as:
+
+Brand manuals
+Warranty portals
+Payment providers including Viva Wallet
+
+We do not control or guarantee:
+
+Content accuracy
+Privacy practices
+Availability
+
+Accessing third-party sites is at your own risk.
+
+6. No Medical or Professional Advice
+
+Products such as wearables and health devices may provide:
+
+Heart rate
+Oxygen levels
+Sleep tracking
+
+This data is:
+
+For informational purposes only
+Not medical advice
+
+Always consult a qualified medical professional before making health decisions.
+
+7. Warranty Disclaimer
+
+Unless explicitly stated:
+
+Warranties are provided by the product manufacturer
+MAPLE is not the warranty provider
+
+We may assist with claims, but:
+
+Terms and coverage are defined by the manufacturer
+
+Customers should retain:
+
+Invoice
+Packaging
+8. Colour & Imagery
+
+Images are for representation only.
+
+Actual products may vary due to:
+
+Lighting
+Display settings
+Manufacturer updates
+9. Product Compatibility
+
+Customers are responsible for ensuring:
+
+Compatibility with devices
+Correct specifications before purchase
+
+MAPLE is not liable for incompatibility issues.
+
+10. Limitation of Liability
+
+To the maximum extent permitted by law:
+
+MAPLE (SynapseEngine OÜ) shall not be liable for:
+
+Inaccuracies in product information
+Third-party content or links
+Misinterpretation of product data
+Indirect or consequential damages
+11. Force Majeure
+
+We are not responsible for delays or failures caused by events beyond our control, including:
+
+Natural disasters
+Government restrictions
+Supply chain disruptions
+12. Relationship with Terms
+
+This Disclaimer should be read alongside our Terms & Conditions and Privacy Policy.
+
+13. Contact
+
+For questions or discrepancies:
+
+📧 support@maple.com
+
+📞 +37257052072
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Refund & Returns Policy
+
+Last updated: April 2026
+
+Simple, fair, and 30 days long.
+
+1. Company Information
+
+This policy is operated by:
+
+SynapseEngine OÜ
+Registered Address: Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115, Estonia
+Phone: +37257052072
+Email: support@maple.com
+
+2. 30-Day Return Window
+
+You may return most items within 30 days of delivery.
+
+The return period begins when the order is marked "Delivered"
+Requests after 30 days may be declined or reviewed case-by-case
+3. Eligible Items
+
+Items must be:
+
+Unused and in original condition
+With all accessories, manuals, and packaging
+Including free gifts (if any)
+
+Note:
+
+Device activation alone does not make an item ineligible
+Missing packaging or damage may result in partial refund or rejection
+4. Ineligible Items
+
+The following are non-returnable:
+
+Opened in-ear headphones / earbuds
+Activated software licenses
+Customized or personalized products
+Used screen protectors
+Items marked “non-returnable”
+5. How to Start a Return
+Log in → Account → Order History
+Select item → Click “Return”
+Choose reason
+
+Reverse pickup:
+
+Scheduled within 24–72 hours
+
+For remote locations:
+
+Self-ship allowed
+Reimbursement up to ₹200 (on approval)
+6. Refund Process & Timelines
+Items undergo quality check within 48 hours
+Refund processed within 5–7 business days
+
+Refund method:
+
+Returned to original payment method (card/UPI/wallet)
+COD orders refunded via bank transfer
+
+Processing time may vary depending on bank/payment provider such as Viva Wallet.
+
+7. Non-Refundable Charges
+
+Unless stated otherwise:
+
+Shipping charges may not be refunded
+COD fees (if any) are non-refundable
+8. Exchanges
+Available via “Exchange” option
+Shipped after original item passes inspection
+Subject to stock availability
+
+If unavailable → automatically converted to refund
+
+9. Damaged / Defective / Wrong Item
+
+Report within 72 hours of delivery with:
+
+Product photos
+Packaging images
+
+We will:
+
+Replace the item OR
+Issue full refund
+
+Return shipping cost is fully covered by us.
+
+10. Return Rejection
+
+Returns may be:
+
+Rejected
+Partially refunded
+
+If items:
+
+Show signs of use
+Are damaged
+Missing components
+11. Pickup Responsibility
+
+Customers must:
+
+Ensure availability for pickup
+Provide correct address
+
+Failed pickups may:
+
+Delay processing
+Lead to cancellation of return request
+12. Abuse & Fair Use
+
+We reserve the right to:
+
+Refuse returns
+Suspend accounts
+
+In cases of:
+
+Excessive returns
+Fraudulent activity
+Policy misuse
+13. Relationship with Terms
+
+This policy forms part of our Terms & Conditions.
+
+14. Contact
+
+Need help?
+
+📧 support@maple.com
+
+📞 +37257052072
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
