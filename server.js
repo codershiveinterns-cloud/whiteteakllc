@@ -5225,6 +5225,60 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/admin/smtp-test") {
+    // Attempts a real SMTP connection and reports the error if one occurs.
+    // Safe: doesn't actually send mail unless ?to=email is given.
+    const out = {
+      SMTP_HOST: process.env.SMTP_HOST || null,
+      SMTP_PORT: process.env.SMTP_PORT || null,
+      SMTP_USER: process.env.SMTP_USER || null,
+      SMTP_FROM: process.env.SMTP_FROM || null,
+      nodemailer: false,
+      connect_ok: false,
+      connect_error: null,
+      send_attempted: false,
+      send_ok: false,
+      send_error: null
+    };
+    let nm = null;
+    try { nm = require("nodemailer"); out.nodemailer = true; } catch (e) { out.connect_error = "nodemailer missing: " + e.message; }
+    if (nm && process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+      const port = Number(process.env.SMTP_PORT || 465);
+      const transporter = nm.createTransport({
+        host: process.env.SMTP_HOST,
+        port,
+        secure: port === 465,
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+      });
+      try {
+        await transporter.verify();
+        out.connect_ok = true;
+      } catch (e) {
+        out.connect_error = e.message + (e.code ? " [" + e.code + "]" : "");
+      }
+      const to = url.searchParams.get("to");
+      if (to && out.connect_ok) {
+        out.send_attempted = true;
+        try {
+          await transporter.sendMail({
+            from: process.env.SMTP_FROM || process.env.SMTP_USER,
+            to,
+            subject: "WizardzWork SMTP test",
+            text: "If you received this, SMTP is working."
+          });
+          out.send_ok = true;
+        } catch (e) {
+          out.send_error = e.message + (e.code ? " [" + e.code + "]" : "");
+        }
+      }
+    } else if (nm) {
+      out.connect_error = "one or more SMTP vars are empty";
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(out, null, 2));
+    return;
+  }
+
   if (req.method === "GET" && pathname === "/admin/env-check") {
     // Safe diagnostic: reports only whether each env var is non-empty, never the value.
     let nodemailerOk = false;
