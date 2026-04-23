@@ -49,9 +49,9 @@
   }
 
   function formatCurrency(value) {
-    return new Intl.NumberFormat("en-IN", {
+    return new Intl.NumberFormat("en-US", {
       style: "currency",
-      currency: "INR",
+      currency: "USD",
       maximumFractionDigits: 0
     }).format(value);
   }
@@ -93,28 +93,58 @@
     const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const count = cart.reduce((sum, item) => sum + item.quantity, 0);
 
-    document.querySelector("[data-cart-items-count]").textContent = count;
-    document.querySelector("[data-cart-total]").textContent = formatCurrency(total);
+    const countEl = document.querySelector("[data-cart-items-count]");
+    if (countEl) countEl.textContent = count;
+    document.querySelectorAll("[data-cart-total]").forEach((el) => { el.textContent = formatCurrency(total); });
 
+    const emptyEl = document.querySelector("[data-cart-empty]");
     if (!cart.length) {
-      container.innerHTML = `<div class="empty-panel">Your cart is empty. Add products from the catalog to continue.</div>`;
+      container.innerHTML = "";
+      if (emptyEl) emptyEl.hidden = false;
       return;
     }
+    if (emptyEl) emptyEl.hidden = true;
 
     container.innerHTML = cart.map((item) => `
-      <article class="cart-line">
-        <img src="${item.image}" alt="${item.name}">
-        <div>
-          <strong>${item.name}</strong>
-          <p>${formatCurrency(item.price)} x ${item.quantity}</p>
+      <article class="cart-line" data-cart-line-id="${item.id}">
+        <img src="${item.image}" alt="${item.name}" style="width:72px;height:72px;object-fit:contain;border-radius:8px;background:#f3f4f6">
+        <div style="flex:1;min-width:0">
+          <strong style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.name}</strong>
+          <p style="margin:4px 0;color:#6b7280;font-size:13px">${formatCurrency(item.price)} each</p>
+          <div class="cart-qty" style="display:inline-flex;align-items:center;gap:6px;margin-top:6px;border:1px solid #e5e7eb;border-radius:8px;padding:3px">
+            <button type="button" data-cart-qty-dec="${item.id}" style="width:28px;height:28px;border:0;background:transparent;font-size:18px;cursor:pointer">−</button>
+            <span data-cart-qty-val="${item.id}" style="min-width:24px;text-align:center;font-weight:700">${item.quantity}</span>
+            <button type="button" data-cart-qty-inc="${item.id}" style="width:28px;height:28px;border:0;background:transparent;font-size:18px;cursor:pointer">+</button>
+          </div>
         </div>
-        <button class="ghost-button" data-remove-id="${item.id}">Remove</button>
+        <div style="text-align:right;min-width:90px">
+          <strong data-cart-line-total="${item.id}">${formatCurrency(item.price * item.quantity)}</strong>
+          <br>
+          <button class="ghost-button" type="button" data-remove-id="${item.id}" style="margin-top:6px;font-size:12px">Remove</button>
+        </div>
       </article>
     `).join("");
 
     container.querySelectorAll("[data-remove-id]").forEach((button) => {
       button.addEventListener("click", () => {
         const next = readCart().filter((item) => String(item.id) !== button.getAttribute("data-remove-id"));
+        writeCart(next);
+        renderCartPage();
+      });
+    });
+    container.querySelectorAll("[data-cart-qty-inc]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-cart-qty-inc");
+        const next = readCart().map((item) => String(item.id) === id ? { ...item, quantity: item.quantity + 1 } : item);
+        writeCart(next);
+        renderCartPage();
+      });
+    });
+    container.querySelectorAll("[data-cart-qty-dec]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-cart-qty-dec");
+        const next = readCart()
+          .map((item) => String(item.id) === id ? { ...item, quantity: Math.max(1, item.quantity - 1) } : item);
         writeCart(next);
         renderCartPage();
       });
@@ -387,6 +417,184 @@
     });
   }
 
+  // ===== PDP: Deliver-to pincode check =====
+  function attachPincodeCheck() {
+    const wrapper = document.querySelector("[data-pdp-pincode]");
+    if (!wrapper) return;
+    const input = wrapper.querySelector("[data-pdp-pin-input]");
+    const btn = wrapper.querySelector("[data-pdp-pin-check]");
+    const out = document.querySelector("[data-pdp-pin-result]");
+    if (!input || !btn || !out) return;
+    const saved = localStorage.getItem("mp-delivery-pin");
+    if (saved) input.value = saved;
+    function check() {
+      const v = (input.value || "").trim();
+      if (!/^\d{6}$/.test(v)) {
+        out.textContent = "Enter a valid 6-digit pincode.";
+        out.style.color = "#dc2626";
+        return;
+      }
+      const eta = 3 + (Number(v[0]) % 4);
+      localStorage.setItem("mp-delivery-pin", v);
+      out.innerHTML = "✓ Delivery available to <strong>" + v + "</strong>. Estimated delivery in <strong>" + eta + "–" + (eta + 2) + " days</strong>. Free shipping.";
+      out.style.color = "#047857";
+    }
+    btn.addEventListener("click", check);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); check(); } });
+  }
+
+  // ===== PDP: Buy Now -> Checkout / Continue shopping =====
+  function attachBuyNow() {
+    document.querySelectorAll("[data-pdp-buy-now]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        let payload;
+        try { payload = JSON.parse(btn.getAttribute("data-buy-now")); } catch { return; }
+        const qtyEl = document.querySelector("[data-pdp2-qty-val]");
+        const qty = Math.max(1, Number(qtyEl && qtyEl.textContent) || 1);
+        const cart = readCart();
+        const existing = cart.find((i) => i.id === payload.id);
+        if (existing) { existing.quantity = Math.max(existing.quantity, qty); }
+        else { cart.push({ id: payload.id, slug: payload.slug, name: payload.name, price: payload.price, image: payload.image, quantity: qty }); }
+        writeCart(cart);
+        const go = window.confirm("Added to cart.\n\nOK → Proceed to Checkout\nCancel → Continue shopping");
+        if (go) window.location.href = "/checkout";
+      });
+    });
+  }
+
+  // ===== PDP: In-cart state (hide qty + change Add-to-Cart CTA when item already in cart) =====
+  function attachPdpInCartState() {
+    const qtyBlock = document.querySelector("[data-pdp-qty-block]");
+    const addBtn = document.querySelector("[data-pdp-product-id]");
+    if (!addBtn) return;
+    const pid = Number(addBtn.getAttribute("data-pdp-product-id"));
+    function apply() {
+      const cart = readCart();
+      const inCart = cart.some((i) => Number(i.id) === pid);
+      if (inCart) {
+        if (qtyBlock) qtyBlock.style.display = "none";
+        addBtn.textContent = "In Cart — Go to Checkout";
+        addBtn.setAttribute("data-in-cart", "1");
+      } else {
+        if (qtyBlock) qtyBlock.style.display = "";
+        addBtn.textContent = "Add to Cart";
+        addBtn.removeAttribute("data-in-cart");
+      }
+    }
+    apply();
+    addBtn.addEventListener("click", (e) => {
+      if (addBtn.getAttribute("data-in-cart") === "1") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        window.location.href = "/checkout";
+      } else {
+        // Let the existing attachAddToCart handler add the item, then re-apply state on next tick
+        setTimeout(apply, 50);
+      }
+    }, true);
+    window.addEventListener("storage", (ev) => { if (ev.key === CART_KEY) apply(); });
+  }
+
+  // ===== Address autocomplete: city -> state + pincode options =====
+  function attachAddressAutocomplete() {
+    const CITIES = (window && window.MP_CITIES) || {};
+    const cityNames = Object.keys(CITIES).sort();
+    function fillList(datalistId, values) {
+      const el = document.getElementById(datalistId);
+      if (!el) return;
+      el.innerHTML = values.map((v) => `<option value="${String(v).replace(/"/g, "&quot;")}"></option>`).join("");
+    }
+    // Populate "all cities" datalists
+    fillList("mp-cities-list", cityNames);
+    fillList("mp-cities-list-dialog", cityNames);
+
+    function findCityKey(value) {
+      if (!value) return null;
+      const v = value.trim().toLowerCase();
+      for (const k of cityNames) {
+        if (k.toLowerCase() === v) return k;
+      }
+      return null;
+    }
+
+    function wire(scope) {
+      const cityInput = scope.querySelector("[data-mp-city-input]");
+      const stateInput = scope.querySelector("[data-mp-state-input]");
+      const pinInput = scope.querySelector("[data-mp-pin-input]");
+      if (!cityInput) return;
+      const isDialog = scope.matches && scope.matches("[data-mp-addr-dialog]");
+      const pinListId = isDialog ? "mp-pins-list-dialog" : "mp-pins-list";
+
+      function handle() {
+        const key = findCityKey(cityInput.value);
+        if (!key) return;
+        const rec = CITIES[key];
+        if (!rec) return;
+        if (stateInput && !stateInput.value) {
+          // Auto-pick matching option
+          for (const opt of stateInput.options) {
+            if (opt.value === rec.state || opt.text === rec.state) {
+              opt.selected = true;
+              break;
+            }
+          }
+        } else if (stateInput) {
+          for (const opt of stateInput.options) {
+            if (opt.value === rec.state || opt.text === rec.state) {
+              opt.selected = true;
+              break;
+            }
+          }
+        }
+        // Populate pin datalist
+        fillList(pinListId, rec.pins || []);
+        // If pin is empty and exactly one pin available, prefill
+        if (pinInput && !pinInput.value && rec.pins && rec.pins.length === 1) {
+          pinInput.value = rec.pins[0];
+        }
+      }
+      cityInput.addEventListener("input", handle);
+      cityInput.addEventListener("change", handle);
+      cityInput.addEventListener("blur", handle);
+      // Fire once on load in case the field was pre-filled
+      if (cityInput.value) handle();
+    }
+
+    // Checkout form
+    const form = document.querySelector("[data-checkout-form]");
+    if (form) wire(form);
+    // Address dialog
+    const dialog = document.querySelector("[data-mp-addr-dialog]");
+    if (dialog) wire(dialog);
+  }
+
+  // ===== Checkout: validate shipping-details step before proceeding =====
+  function attachCheckoutShippingValidation() {
+    const form = document.querySelector("[data-checkout-form]");
+    if (!form) return;
+    const nextBtn = form.querySelector("[data-cr-next]");
+    if (!nextBtn) return;
+    const required = ["customerName", "email", "phone", "address", "city", "state", "pincode"];
+    nextBtn.addEventListener("click", (e) => {
+      const data = new FormData(form);
+      const missing = [];
+      for (const name of required) {
+        const v = (data.get(name) || "").toString().trim();
+        if (!v) { missing.push(name); continue; }
+        if (name === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) missing.push("valid email");
+        if (name === "phone" && !/^[+\d][\d\s-]{6,}$/.test(v)) missing.push("valid phone");
+        if (name === "pincode" && !/^\d{4,8}$/.test(v)) missing.push("valid pincode");
+      }
+      if (missing.length) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        alert("Please fill valid shipping details before continuing:\n• " + missing.join("\n• "));
+        return false;
+      }
+    }, true);
+  }
+
   updateCartCount();
   attachAddToCart();
   renderCartPage();
@@ -394,6 +602,11 @@
   attachGallery();
   attachCarousel();
   attachRails();
+  attachPincodeCheck();
+  attachBuyNow();
+  attachPdpInCartState();
+  attachCheckoutShippingValidation();
+  attachAddressAutocomplete();
 
   function attachV2Carousel() {
     const roots = document.querySelectorAll("[data-v2-carousel]");

@@ -911,7 +911,44 @@ h1.page-title { margin: 0; font-size: clamp(1.8rem, 3vw, 3rem); line-height: 1.0
   color: white;
 }
 .muted-row span { background: var(--bg); }
-.product-card h3 { margin: 10px 0 5px; font-size: 0.98rem; line-height: 1.38; }
+.product-card h3 {
+  margin: 10px 0 5px;
+  font-size: 0.98rem;
+  line-height: 1.38;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 2.7em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.product-card h3 a { color: inherit; text-decoration: none; }
+.product-card .product-brand {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.product-card .stock.out-of-stock {
+  color: #dc2626;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+.product-card button[disabled],
+.pdp2-cart[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #9ca3af !important;
+  border-color: #9ca3af !important;
+}
+.pdp2-buy[data-disabled="1"],
+.pdp2-buy.is-disabled {
+  pointer-events: none;
+  opacity: 0.55;
+  background: #9ca3af;
+}
 .rating-chip {
   padding: 5px 9px;
   border-radius: 999px;
@@ -2442,9 +2479,27 @@ body[class*="theme-"] .cr-footer .cr-footer-social a:hover {
   padding: 0 7px;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 999px;
-  background: var(--accent, #0d9488);
-  color: #fff;
-  font-size: 0.72rem; font-weight: 700;
+  background: var(--badge-bg, #111827);
+  color: var(--badge-fg, #ffffff);
+  font-size: 0.72rem; font-weight: 800;
+  letter-spacing: 0.2px;
+}
+/* Theme-contrast count chip inside the top-header cart + wishlist pills.
+   Targets only the number span so it contrasts with whatever theme background
+   the surrounding pill uses. */
+.site-header [data-cart-count],
+.site-header [data-wish-count],
+.cart-pill [data-cart-count],
+.mp-wish-link [data-wish-count] {
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  min-width: 20px; height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--badge-bg, #111827);
+  color: var(--badge-fg, #ffffff);
+  font-size: 0.72rem; font-weight: 800;
+  line-height: 1;
 }
 .mp-nav-section {
   padding: 18px 22px 6px;
@@ -3076,6 +3131,15 @@ body.theme-navy .mp-link, body.theme-slate .mp-link,
 body.theme-espresso .mp-link, body.theme-forest .mp-link,
 body.theme-plum .mp-link, body.theme-storm .mp-link,
 body.theme-obsidian .mp-link, body.theme-carbon .mp-link { color: var(--accent); }
+
+/* Theme-contrast cart/wishlist count badges: on dark themes use a light pill, on light themes use a dark pill */
+body.theme-snow, body.theme-pearl, body.theme-cloud, body.theme-sand,
+body.theme-mint, body.theme-rose, body.theme-ivory, body.theme-arctic,
+body.theme-lavender, body.theme-sage { --badge-bg: #111827; --badge-fg: #ffffff; }
+
+body.theme-midnight, body.theme-charcoal, body.theme-navy, body.theme-slate,
+body.theme-espresso, body.theme-forest, body.theme-plum, body.theme-storm,
+body.theme-obsidian, body.theme-carbon { --badge-bg: #f8fafc; --badge-fg: #0f172a; }
 
 body.theme-midnight .mp-addr-btn, body.theme-charcoal .mp-addr-btn,
 body.theme-navy .mp-addr-btn, body.theme-slate .mp-addr-btn,

@@ -11,6 +11,7 @@ const crypto = require("crypto");
 const { openDatabase } = require("./db-shim");
 
 const { createDataLayer, verifyPassword, hashPassword } = require("./data-layer");
+const { CITIES: INDIAN_CITIES } = require("./data/india-cities.js");
 const { sendOtpEmail } = require("./mailer");
 
 let productsV2 = [];
@@ -777,9 +778,9 @@ function verifyRazorpaySignature(orderId, paymentId, signature) {
 }
 
 function currency(value) {
-  return new Intl.NumberFormat("en-IN", {
+  return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "INR",
+    currency: "USD",
     maximumFractionDigits: 0
   }).format(value);
 }
@@ -1152,14 +1153,19 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
       <dialog class="mp-addr-dialog" data-mp-addr-dialog>
         <form method="dialog" class="mp-addr-form" data-mp-addr-form>
           <h3>Choose delivery location</h3>
-          <label>District / City<input name="city" required value="${escapeHtml(userAddress?.city || "")}"></label>
+          <label>District / City / Town
+            <input name="city" list="mp-cities-list-dialog" required value="${escapeHtml(userAddress?.city || "")}" data-mp-city-input>
+          </label>
           <label>State
-            <select name="state" required>
+            <select name="state" required data-mp-state-input>
               <option value="">Select state</option>
               ${INDIAN_STATES.map(s => `<option ${userAddress?.state === s ? "selected" : ""}>${s}</option>`).join("")}
             </select>
           </label>
-          <label>PIN Code<input name="pin" pattern="\\d{6}" maxlength="6" required value="${escapeHtml(userAddress?.pin || "")}"></label>
+          <label>PIN Code<input name="pin" list="mp-pins-list-dialog" pattern="\\d{6}" maxlength="6" required value="${escapeHtml(userAddress?.pin || "")}" data-mp-pin-input></label>
+          <datalist id="mp-cities-list-dialog"></datalist>
+          <datalist id="mp-pins-list-dialog"></datalist>
+          <p style="margin:-4px 0 8px;font-size:12px;color:#6b7280">Start typing a city — state and pincode options will auto-fill.</p>
           <div class="mp-addr-actions">
             <button type="button" data-mp-addr-cancel class="mp-ghost">Cancel</button>
             <button type="submit" class="mp-primary">Save</button>
@@ -1173,6 +1179,7 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
       ${renderCromaFooter()}
     </div>
     <script>window.__MAPLE_THEME__=${JSON.stringify(theme || "snow")};</script>
+    <script>window.MP_CITIES=${JSON.stringify(INDIAN_CITIES)};window.MP_STATES=${JSON.stringify(INDIAN_STATES)};</script>
     <script src="/public/app.js"></script>
   </body>
   </html>`;
@@ -1329,16 +1336,20 @@ function productCard(product) {
           <strong>${currency(product.price)}</strong>
           <del>${currency(product.original_price || product.originalPrice)}</del>
         </div>
-        <p class="stock ${product.stock < 10 ? "low" : ""}">${product.stock} units in stock</p>
+        ${product.stock <= 0
+          ? `<p class="stock out-of-stock">Out of stock</p>`
+          : `<p class="stock ${product.stock < 10 ? "low" : ""}">${product.stock} units in stock</p>`}
         <div class="card-actions">
           <a class="ghost-button" href="/product/${product.slug}">View details</a>
-          <button class="primary-button" data-add-to-cart='${JSON.stringify({
-            id: product.id,
-            slug: product.slug,
-            name: product.name,
-            price: product.price,
-            image: product.image
-          }).replace(/'/g, "&apos;")}'>Add to cart</button>
+          ${product.stock <= 0
+            ? `<button class="primary-button" disabled aria-disabled="true">Unavailable</button>`
+            : `<button class="primary-button" data-add-to-cart='${JSON.stringify({
+                id: product.id,
+                slug: product.slug,
+                name: product.name,
+                price: product.price,
+                image: product.image
+              }).replace(/'/g, "&apos;")}'>Add to cart</button>`}
         </div>
       </div>
     </article>
@@ -1461,28 +1472,28 @@ function legacyHomePage(user = null) {
     {
       title: "Laptops for every desk",
       subtitle: "Productivity, creators, and campus-ready picks",
-      price: "Starting at ₹49,990",
+      price: "Starting at $699",
       href: "/category/laptops",
       image: featured[0]?.image || "/assets/products/macbook-air-m3-1.png"
     },
     {
       title: "True wireless audio",
       subtitle: "Earbuds and speakers with all-day battery",
-      price: "Starting at ₹1,499",
+      price: "Starting at $69",
       href: "/category/audio",
       image: audio[0]?.image || featured[1]?.image || "/assets/products/macbook-air-m3-2.png"
     },
     {
       title: "Smartphones with flagship chips",
       subtitle: "Higher RAM and storage options available",
-      price: "Starting at ₹17,999",
+      price: "Starting at $249",
       href: "/category/mobiles",
       image: mobiles[0]?.image || featured[2]?.image || "/assets/products/macbook-air-m3-3.png"
     },
     {
       title: "4K TVs and smart entertainment",
       subtitle: "Cinema-style viewing for modern living rooms",
-      price: "Starting at ₹27,990",
+      price: "Starting at $399",
       href: "/category/tvs",
       image: featured[3]?.image || featured[0]?.image || "/assets/products/macbook-air-m3-1.png"
     }
@@ -1875,7 +1886,7 @@ function homePage(user = null) {
 
   const slides = [
     {
-      kicker: "Up to ₹12,000 off",
+      kicker: "Up to $200 off",
       title: "MAPLE Mobiles",
       subtitle: "iPhone 15, Galaxy S24, Pixel 9 Pro and more — premium smartphones, certified genuine.",
       cta: "Shop Mobiles",
@@ -1917,7 +1928,7 @@ function homePage(user = null) {
     {
       kicker: "Fresh in",
       title: "New arrivals — up to 15% off",
-      subtitle: "Latest launches hand-picked by our editors. Free delivery above ₹999.",
+      subtitle: "Latest launches hand-picked by our editors. Free delivery on every order.",
       cta: "Explore new",
       href: "/products?sort=newest",
       image: "/public/assets/products-v3/laptops/laptops-10.jpg",
@@ -1945,7 +1956,7 @@ function homePage(user = null) {
   const brands = ["Apple", "Samsung", "Canon", "Philips", "Tefal", "Sony", "LG", "Bose"];
 
   const offers = [
-    { title: "Free shipping over \u20B9999", text: "Fast, trackable delivery on every qualifying order across India.", icon: "\uD83D\uDE9A", bg: "#dbeafe" },
+    { title: "Free shipping worldwide", text: "Fast, trackable delivery on every order. No minimum, no surprise fees.", icon: "\uD83D\uDE9A", bg: "#dbeafe" },
     { title: "30-day easy returns", text: "Not the right fit? Send it back within 30 days, no questions asked.", icon: "\uD83D\uDD04", bg: "#fce7f3" },
     { title: "Secure checkout", text: "256-bit SSL and tokenised payments keep your data protected.", icon: "\uD83D\uDD12", bg: "#fef9c3" }
   ];
@@ -1972,10 +1983,10 @@ function homePage(user = null) {
     } catch { return []; }
   })();
   const priceBuckets = [
-    { label: "Under ₹10,000", href: "/products?maxPrice=10000", bg: "linear-gradient(135deg,#e0f2fe,#bae6fd)" },
-    { label: "₹10K – ₹30K", href: "/products?minPrice=10000&maxPrice=30000", bg: "linear-gradient(135deg,#fef3c7,#fde68a)" },
-    { label: "₹30K – ₹80K", href: "/products?minPrice=30000&maxPrice=80000", bg: "linear-gradient(135deg,#fce7f3,#fbcfe8)" },
-    { label: "Over ₹80,000", href: "/products?minPrice=80000", bg: "linear-gradient(135deg,#ddd6fe,#c7d2fe)" }
+    { label: "Under $300", href: "/products?maxPrice=300", bg: "linear-gradient(135deg,#e0f2fe,#bae6fd)" },
+    { label: "$300 – $800", href: "/products?minPrice=300&maxPrice=800", bg: "linear-gradient(135deg,#fef3c7,#fde68a)" },
+    { label: "$800 – $2,000", href: "/products?minPrice=800&maxPrice=2000", bg: "linear-gradient(135deg,#fce7f3,#fbcfe8)" },
+    { label: "Over $2,000", href: "/products?minPrice=2000", bg: "linear-gradient(135deg,#ddd6fe,#c7d2fe)" }
   ];
   return layout({
     title: "MAPLE \u2014 Electronics reimagined",
@@ -2031,7 +2042,7 @@ function homePage(user = null) {
           <div class="mp-section-head"><h2>Why shop MAPLE</h2></div>
           <div class="mp-why-grid">
             <article class="mp-why-card mp-why-tile"><div class="mp-why-icon" aria-hidden="true">✓</div><h3>100% Genuine</h3><p>Every product sourced from brands and authorised distributors.</p></article>
-            <article class="mp-why-card mp-why-tile"><div class="mp-why-icon" aria-hidden="true">⚡</div><h3>Free Delivery ₹999+</h3><p>Fast, trackable shipping to 18,000+ pincodes across India.</p></article>
+            <article class="mp-why-card mp-why-tile"><div class="mp-why-icon" aria-hidden="true">⚡</div><h3>Free Delivery</h3><p>Fast, trackable shipping worldwide. No minimum order value.</p></article>
             <article class="mp-why-card mp-why-tile"><div class="mp-why-icon" aria-hidden="true">↺</div><h3>30-Day Easy Returns</h3><p>Change of mind? Send it back within 30 days — no hassle.</p></article>
           </div>
         </section>
@@ -2285,7 +2296,7 @@ function productsPage(url, forcedCategory = "", user = null) {
                 </div>
               </div>
               <div class="cr-filter-block">
-                <h4>Price Range (₹)</h4>
+                <h4>Price Range ($)</h4>
                 <div class="eo-price-range">
                   <input type="number" name="minPrice" placeholder="Min" value="${minPrice || ""}" min="0">
                   <input type="number" name="maxPrice" placeholder="Max" value="${maxPrice || ""}" min="0">
@@ -3226,7 +3237,7 @@ function productDetailPage(slug, user = null) {
               ${product.original_price > product.price ? `<span class="pdp2-strike">${currency(product.original_price)}</span>` : ""}
               ${product.original_price > product.price ? `<span class="pdp2-off">${Math.round(((product.original_price - product.price)/product.original_price)*100)}% off</span>` : ""}
             </div>
-            <p class="pdp2-emi">Inclusive of all taxes · EMI from <strong>${currency(emiMonthly)}/mo</strong></p>
+            <p class="pdp2-emi">Free shipping · No taxes</p>
 
             ${colorVariants.length ? `
               <div class="pdp2-variant">
@@ -3246,26 +3257,42 @@ function productDetailPage(slug, user = null) {
               </div>
             ` : ""}
 
-            <div class="pdp2-pincode">
-              <label>Deliver to <input type="text" placeholder="Pincode" maxlength="6" value="400049"></label>
-              <button type="button">Check</button>
+            <div class="pdp2-pincode" data-pdp-pincode>
+              <label>Deliver to <input type="text" placeholder="6-digit pincode" maxlength="6" inputmode="numeric" pattern="\\d{6}" data-pdp-pin-input></label>
+              <button type="button" data-pdp-pin-check>Check</button>
             </div>
-            <p class="pdp2-delivery">Delivery by 16 April · Free shipping above ₹499</p>
+            <p class="pdp2-pin-result" data-pdp-pin-result aria-live="polite" style="margin:6px 0 0;font-size:13px;color:#555"></p>
+            <p class="pdp2-delivery">Free shipping worldwide · No taxes · Typical delivery in 3–7 days</p>
 
-            <div class="pdp2-qty">
-              <span>Quantity</span>
-              <div class="pdp2-qty-ctrl"><button type="button" data-pdp2-qty="-">−</button><span data-pdp2-qty-val>1</span><button type="button" data-pdp2-qty="+">+</button></div>
-            </div>
+            ${product.stock <= 0 ? `
+              <div class="pdp2-outofstock" style="margin:10px 0;padding:10px 14px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#b91c1c;font-weight:700">Out of stock — this product is currently unavailable.</div>
+            ` : `
+              <div class="pdp2-qty" data-pdp-qty-block>
+                <span>Quantity</span>
+                <div class="pdp2-qty-ctrl"><button type="button" data-pdp2-qty="-">−</button><span data-pdp2-qty-val>1</span><button type="button" data-pdp2-qty="+">+</button></div>
+                <span class="pdp2-qty-stock" style="margin-left:10px;font-size:12px;color:#666">${product.stock} available</span>
+              </div>
+            `}
 
             <div class="pdp2-ctas">
-              <button class="pdp2-cart" data-add-to-cart='${JSON.stringify({
-                id: product.id,
-                slug: product.slug,
-                name: product.name,
-                price: product.price,
-                image: product.image
-              }).replace(/'/g, "&apos;")}'>Add to Cart</button>
-              <a class="pdp2-buy" href="/checkout">Buy Now</a>
+              ${product.stock <= 0
+                ? `<button class="pdp2-cart" type="button" disabled aria-disabled="true">Unavailable</button>
+                   <a class="pdp2-buy is-disabled" href="#" data-disabled="1" aria-disabled="true">Out of stock</a>`
+                : `<button class="pdp2-cart" type="button" data-pdp-product-id="${product.id}" data-add-to-cart='${JSON.stringify({
+                    id: product.id,
+                    slug: product.slug,
+                    name: product.name,
+                    price: product.price,
+                    image: product.image
+                  }).replace(/'/g, "&apos;")}'>Add to Cart</button>
+                   <button class="pdp2-buy" type="button" data-pdp-buy-now data-buy-now='${JSON.stringify({
+                    id: product.id,
+                    slug: product.slug,
+                    name: product.name,
+                    price: product.price,
+                    image: product.image,
+                    stock: product.stock
+                  }).replace(/'/g, "&apos;")}'>Buy Now</button>`}
               <button class="pdp2-heart ${inWishlist ? "is-on" : ""}" type="button" data-pdp2-wish="${product.id}" aria-label="Save to wishlist">${inWishlist ? "♥" : "♡"}</button>
             </div>
 
@@ -3385,14 +3412,14 @@ function cartPage(user = null) {
             <h3>Order Summary</h3>
             <div class="cr-cart-row"><span>Subtotal (<em data-cart-items-count>0</em> items)</span><strong data-cart-total>${currency(0)}</strong></div>
             <div class="cr-cart-row"><span>Delivery</span><strong class="cr-cart-free">FREE</strong></div>
-            <div class="cr-cart-row"><span>Estimated Tax</span><strong>Calculated at checkout</strong></div>
+            <div class="cr-cart-row"><span>Taxes</span><strong class="cr-cart-free">$0</strong></div>
             <div class="cr-cart-promo">
               <input type="text" placeholder="Enter promo code">
               <button type="button">Apply</button>
             </div>
             <div class="cr-cart-row cr-cart-total"><span>Total</span><strong data-cart-total>${currency(0)}</strong></div>
             <a class="cr-cart-checkout" href="/checkout">Proceed to Checkout</a>
-            <p class="cr-cart-secure">Secure checkout · 7-day returns</p>
+            <p class="cr-cart-secure">Secure checkout · Free shipping · No taxes · 7-day returns</p>
           </aside>
         </div>
       </main>
@@ -3430,15 +3457,27 @@ function checkoutPage(user = null) {
         <form class="cr-co-form" data-checkout-form data-cr-form>
           <section class="cr-co-step is-active" data-step-body="1">
             <h2>Shipping Details</h2>
-            <label>Full name<input name="customerName" value="${escapeHtml(user?.name || "")}" required></label>
+            <label>Full name<input name="customerName" value="${escapeHtml(user?.name || "")}" required minlength="2"></label>
             <label>Email<input type="email" name="email" value="${escapeHtml(user?.email || "")}" required></label>
-            <label>Phone<input name="phone" required></label>
-            <label>Address<input name="address" required></label>
+            <label>Phone<input name="phone" required pattern="[+\\d][\\d\\s-]{6,}" placeholder="e.g. +91 98765 43210"></label>
+            <label>Address (house no., street, area)<input name="address" required minlength="5"></label>
             <div class="cr-co-grid-2">
-              <label>City<input name="city" required></label>
-              <label>State<input name="state" required></label>
+              <label>City / District / Town
+                <input name="city" list="mp-cities-list" required autocomplete="address-level2" data-mp-city-input>
+              </label>
+              <label>State
+                <select name="state" required data-mp-state-input>
+                  <option value="">Select state</option>
+                  ${INDIAN_STATES.map(s => `<option>${s}</option>`).join("")}
+                </select>
+              </label>
             </div>
-            <label>Pincode<input name="pincode" required></label>
+            <label>Pincode
+              <input name="pincode" list="mp-pins-list" required pattern="\\d{4,8}" maxlength="8" inputmode="numeric" data-mp-pin-input>
+            </label>
+            <datalist id="mp-cities-list"></datalist>
+            <datalist id="mp-pins-list"></datalist>
+            <p class="cr-co-hint" style="margin:-4px 0 8px;font-size:12px;color:#6b7280">Start typing a city — state and pincode options will appear automatically.</p>
             <div class="cr-co-actions">
               <button type="button" class="cr-co-next" data-cr-next>Continue to Payment</button>
             </div>
@@ -4319,7 +4358,7 @@ function aboutPage(user = null) {
             <ul class="mp-about-list">
               <li><strong>Single-vendor, single standard.</strong> We own every SKU in our catalogue. No third-party sellers, no inconsistent quality — one standard applies everywhere.</li>
               <li><strong>Genuine only.</strong> We source directly from brands and authorised distributors — zero grey-market stock.</li>
-              <li><strong>Transparent pricing.</strong> Prices in INR, inclusive of GST, with no last-minute surprises at checkout.</li>
+              <li><strong>Transparent pricing.</strong> Transparent pricing in USD, no hidden fees or taxes at checkout.</li>
               <li><strong>Real support.</strong> A real human on the other end of <a href="mailto:support@maple.com">support@maple.com</a> — 92% of queries resolved on first contact.</li>
               <li><strong>Fair returns.</strong> A simple 30-day return window on eligible items, refunded to the original payment method.</li>
               <li><strong>Secure by default.</strong> TLS in transit, hashed passwords, PCI-compliant payments via Viva Wallet — we never store raw card data.</li>
@@ -4392,8 +4431,8 @@ function termsPage(user = null) {
 
           <h2>6. Pricing &amp; Taxes</h2>
           <ul>
-            <li>Prices are listed in INR (₹).</li>
-            <li>Inclusive of applicable GST unless stated otherwise.</li>
+            <li>Prices are listed in US Dollars (USD, $).</li>
+            <li>All prices are final; no taxes are charged.</li>
             <li>Prices may change without prior notice.</li>
           </ul>
 
@@ -4743,7 +4782,7 @@ function refundPage(user = null) {
             <li>Choose reason</li>
           </ol>
           <p><strong>Reverse pickup:</strong> scheduled within 24–72 hours.</p>
-          <p><strong>Remote locations:</strong> self-ship allowed, reimbursement up to ₹200 (on approval).</p>
+          <p><strong>Remote locations:</strong> self-ship allowed, reimbursement up to $5 (on approval).</p>
 
           <h2>6. Refund Process &amp; Timelines</h2>
           <ul>
