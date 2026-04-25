@@ -1180,7 +1180,7 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
           <datalist id="mp-cities-list-dialog"></datalist>
           <datalist id="mp-states-list-dialog">${INDIAN_STATES.map(s => `<option>${s}</option>`).join("")}</datalist>
           <datalist id="mp-pins-list-dialog"></datalist>
-          <p style="margin:-4px 0 8px;font-size:12px;color:#6b7280">Free shipping worldwide · Start typing a city and we'll suggest state/pincode for Indian locations.</p>
+          <p style="margin:-4px 0 8px;font-size:12px;color:#6b7280">Free shipping worldwide · Start typing a city and we'll suggest state/postal code where available.</p>
           <div class="mp-addr-actions">
             <button type="button" data-mp-addr-cancel class="mp-ghost">Cancel</button>
             <button type="submit" class="mp-primary">Save</button>
@@ -2025,7 +2025,7 @@ function homePage(user = null) {
   ];
   return layout({
     title: "WizardzWork \u2014 Electronics reimagined",
-    description: "WizardzWork — India's modern electronics store for phones, laptops, audio and more.",
+    description: "WizardzWork — your trusted modern electronics store for phones, laptops, audio and more.",
     currentPath: "/",
     user,
     content: `
@@ -2136,7 +2136,7 @@ function renderCromaFooter() {
       <div class="cr-footer-top">
         <div class="cr-footer-col cr-footer-brand">
           <span class="mp-brand-mark" aria-hidden="true">W</span><span class="brand-word">WizardzWork</span>
-          <p>India's favourite destination for electronics, gadgets & appliances.</p>
+          <p>Your trusted destination for electronics, gadgets &amp; appliances.</p>
           <div class="cr-footer-social mp-social">
             <a href="https://instagram.com/wizardzwork" aria-label="Instagram" target="_blank" rel="noopener"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor"/></svg></a>
             <a href="https://youtube.com/@wizardzwork" aria-label="YouTube" target="_blank" rel="noopener"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M21.6 7.2a2.6 2.6 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4A2.6 2.6 0 0 0 2.4 7.2 27 27 0 0 0 2 12a27 27 0 0 0 .4 4.8 2.6 2.6 0 0 0 1.8 1.8C5.8 19 12 19 12 19s6.2 0 7.8-.4a2.6 2.6 0 0 0 1.8-1.8A27 27 0 0 0 22 12a27 27 0 0 0-.4-4.8ZM10 15V9l5 3Z"/></svg></a>
@@ -4414,7 +4414,7 @@ function aboutPage(user = null) {
               <li><strong>Customer support:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
               <li><strong>Admin / business:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
               <li><strong>Phone:</strong> +37257052072</li>
-              <li><strong>Governing law:</strong> India · Jurisdiction: Bengaluru, Karnataka</li>
+              <li><strong>Governing law:</strong> Republic of Estonia · Jurisdiction: Courts of Estonia</li>
             </ul>
 
             <p class="mp-about-foot">Related policies: <a href="/terms">Terms &amp; Conditions</a> · <a href="/privacy">Privacy</a> · <a href="/refund">Refund &amp; Returns</a> · <a href="/disclaimer">Disclaimer</a></p>
@@ -4497,7 +4497,7 @@ function termsPage(user = null) {
 
           <h2>9. Shipping &amp; Delivery</h2>
           <ul>
-            <li>Delivery available across eligible locations in India.</li>
+            <li>Delivery available across eligible locations worldwide.</li>
             <li>Delivery timelines are estimates.</li>
             <li>Risk transfers upon delivery.</li>
           </ul>
@@ -4532,9 +4532,9 @@ function termsPage(user = null) {
           <p>Use of WizardzWork is also governed by our <a href="/privacy">Privacy Policy</a>.</p>
 
           <h2>18. Governing Law &amp; Jurisdiction</h2>
-          <p>These Terms are governed by the laws of India. All disputes fall under the jurisdiction of the Courts in Bengaluru, Karnataka. Parties agree to attempt mediation before litigation.</p>
+          <p>These Terms are governed by the laws of the Republic of Estonia, where SynapseEngine OÜ is incorporated. All disputes fall under the jurisdiction of the Courts of Estonia. Parties agree to attempt mediation before litigation.</p>
 
-          <h2>19. Grievance Officer (India Compliance)</h2>
+          <h2>19. Grievance &amp; Compliance Officer</h2>
           <ul>
             <li><strong>Name:</strong> To be appointed</li>
             <li><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
@@ -4958,9 +4958,9 @@ function storyPage(user = null) {
           <p>The next two years were exactly as messy as every founder story claims. We onboarded the wrong inventory partner and lost six weeks of Diwali sales. We launched a mobile app that crashed on half of our users' phones and had to rewrite it from scratch. We hired too fast in 2021, then had to have the hardest conversations of our careers in early 2022. Each of those moments taught us something we couldn't have learned any other way: that honesty scales further than hustle, that slow software kills trust faster than high prices, and that the quality of a team matters far more than its size.</p>
           <p>By 2023 we'd rebuilt the entire stack on a single thesis: every experience on WizardzWork — the homepage, the product page, the checkout, the support chat — should feel like it was designed by someone who actually shops here.</p>
           <h2>Today</h2>
-          <p>Today, WizardzWork serves customers across all twenty-eight states and eight union territories. We list over ten thousand products across laptops, mobiles, headphones, wearables and accessories. Our editorial team publishes weekly buying guides, our support team resolves over 92% of queries on first contact, and our logistics partners deliver to more than 18,000 pincodes. None of those numbers are what we're proudest of — we're proudest of the handwritten notes our customers send us, and the fact that nearly seven out of ten WizardzWork customers come back within twelve months.</p>
+          <p>Today, WizardzWork serves customers across the globe. We list over ten thousand products across laptops, mobiles, headphones, wearables and accessories. Our editorial team publishes weekly buying guides, our support team resolves over 92% of queries on first contact, and our logistics partners deliver worldwide. None of those numbers are what we're proudest of — we're proudest of the handwritten notes our customers send us, and the fact that nearly seven out of ten WizardzWork customers come back within twelve months.</p>
           <h2>Where we're going</h2>
-          <p>Our vision for the next five years is ambitious and, we think, worth the work. We want WizardzWork to be the store that Indian families turn to first — not because we're the cheapest or the flashiest, but because we're the most trustworthy. We're investing heavily in three areas: deeper editorial content so buyers have a real guide, not just a filter; better after-sales service including in-home setup and repair; and a small but growing lineup of WizardzWork-designed accessories built specifically for how Indians actually use technology every day.</p>
+          <p>Our vision for the next five years is ambitious and, we think, worth the work. We want WizardzWork to be the store that families everywhere turn to first — not because we're the cheapest or the flashiest, but because we're the most trustworthy. We're investing heavily in three areas: deeper editorial content so buyers have a real guide, not just a filter; better after-sales service including in-home setup and repair; and a small but growing lineup of WizardzWork-designed accessories built specifically for how everyday people actually use technology.</p>
           <p>We know we won't get everything right. But we'll keep doing the thing that got us here — listening to our customers, telling the truth about what we sell, and earning trust one order at a time.</p>
         </section>
       </main>
@@ -4978,12 +4978,12 @@ function storeLocatorPage(user = null) {
         <section class="mp-page-hero"><h1>Store Locator</h1><p>Find a WizardzWork store near you.</p></section>
         <section class="mp-store-grid">
           <article class="mp-store-card">
-            <h3>WizardzWork Bengaluru Flagship</h3>
-            <p>101, Residency Road, Bengaluru, Karnataka 560025</p>
-            <p><strong>Hours:</strong> Mon–Sun, 10:00 AM – 9:30 PM</p>
-            <p><strong>Phone:</strong> <a href="tel:+919999999999">+91 9999999999</a></p>
+            <h3>WizardzWork Headquarters</h3>
+            <p>SynapseEngine OÜ, Tallinn, Republic of Estonia</p>
+            <p><strong>Hours:</strong> Mon–Fri, 09:00 – 18:00 EET</p>
+            <p><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></p>
           </article>
-          <iframe src="https://www.google.com/maps?q=Bangalore&output=embed" width="100%" height="400" style="border:0;border-radius:16px" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="WizardzWork Bengaluru"></iframe>
+          <iframe src="https://www.google.com/maps?q=Tallinn,Estonia&output=embed" width="100%" height="400" style="border:0;border-radius:16px" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="WizardzWork HQ — Tallinn"></iframe>
         </section>
       </main>
     `
