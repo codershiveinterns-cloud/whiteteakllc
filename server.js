@@ -5164,9 +5164,20 @@ function countWords(s) {
   return String(s || "").trim().split(/\s+/).filter(Boolean).length;
 }
 
+// Toggle to true to take the whole site offline (returns a plain 404 for every
+// non-static request). Flip back to false to restore.
+const SITE_OFFLINE = true;
+
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = decodeURIComponent(url.pathname);
+
+  if (SITE_OFFLINE) {
+    res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>404 Not Found</title><style>body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}main{padding:32px}h1{font-size:96px;margin:0;font-weight:800;letter-spacing:-2px}p{margin:8px 0 0;color:#94a3b8}</style></head><body><main><h1>404</h1><p>Not Found</p></main></body></html>`);
+    return;
+  }
+
   const currentUser = await getCurrentUser(req);
   globalThis.__wwCtx = getRequestContext(req);
 
