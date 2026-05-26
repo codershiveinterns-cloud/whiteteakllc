@@ -55,14 +55,14 @@ class SqliteStore {
   }
 
   ensureDefaultAdmin() {
-    const email = "admin@electrohub.local";
+    const email = "admin@whiteteakllc.com";
     const existing = this.db.prepare("SELECT id FROM users WHERE email = ?").get(email);
     if (existing) return;
     const now = new Date().toISOString();
     const passwordHash = hashPassword("Admin@123");
     this.db.prepare(
       "INSERT INTO users (name, email, password_hash, verified, created_at) VALUES (?, ?, ?, 1, ?)"
-    ).run("MAPLE Admin", email, passwordHash, now);
+    ).run("WhiteTeak Admin", email, passwordHash, now);
   }
 
   async getUserByEmail(email) {

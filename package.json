@@ -1,7 +1,7 @@
 {
-  "name": "wizardzwork",
+  "name": "whiteteakllc",
   "version": "1.0.0",
-  "description": "WizardzWork e-commerce storefront",
+  "description": "WhiteTeak LLC e-commerce storefront",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

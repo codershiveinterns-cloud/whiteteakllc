@@ -179,7 +179,7 @@ function ensureProductColumn(columnName, sqlType) {
 function seedProductsIfNeeded() {
   const existing = db.prepare("SELECT COUNT(*) AS count FROM products").get().count;
   const hasPlaceholderNames = existing
-    ? db.prepare("SELECT COUNT(*) AS count FROM products WHERE name LIKE 'WizardzWork %' OR brand = 'WizardzWork'").get().count > 0
+    ? db.prepare("SELECT COUNT(*) AS count FROM products WHERE name LIKE 'WHITETEAKLLC %' OR brand = 'WHITETEAKLLC'").get().count > 0
     : false;
   const hasRemoteImages = existing
     ? db.prepare("SELECT COUNT(*) AS count FROM products WHERE image LIKE 'http%'").get().count > 0
@@ -1092,7 +1092,7 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
     <div class="shell">
       <header class="site-header mp-header">
         <a class="brand mp-brand" href="/">
-          <span class="mp-brand-mark" aria-hidden="true">W</span><span class="brand-word">WizardzWork</span>
+          <span class="mp-brand-mark" aria-hidden="true">WT</span><span class="brand-word">WHITETEAKLLC</span>
         </a>
         <button type="button" class="menu-link mp-nav-toggle" data-mp-nav-toggle aria-label="Open menu" aria-expanded="false">☰ <span>Menu</span></button>
         <nav class="main-nav mp-header-nav">${nav(currentPath)}</nav>
@@ -1200,20 +1200,21 @@ function layout({ title, description = "", currentPath = "/", content, user = nu
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
       import { getAnalytics, isSupported as analyticsSupported } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-analytics.js";
       const firebaseConfig = {
-        apiKey: "AIzaSyBYuNRiKdggUGZrjl6lnBYFNYGuINuOa2I",
-        authDomain: "wizardwork-16a96.firebaseapp.com",
-        projectId: "wizardwork-16a96",
-        storageBucket: "wizardwork-16a96.firebasestorage.app",
-        messagingSenderId: "220610525597",
-        appId: "1:220610525597:web:ff1aa88fff190a9b849774",
-        measurementId: "G-P15FK543DV"
+        apiKey: ${JSON.stringify(process.env.FIREBASE_WEB_API_KEY || "")},
+        authDomain: ${JSON.stringify(process.env.FIREBASE_WEB_AUTH_DOMAIN || "")},
+        projectId: ${JSON.stringify(process.env.FIREBASE_WEB_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || "")},
+        storageBucket: ${JSON.stringify(process.env.FIREBASE_WEB_STORAGE_BUCKET || "")},
+        messagingSenderId: ${JSON.stringify(process.env.FIREBASE_WEB_MESSAGING_SENDER_ID || "")},
+        appId: ${JSON.stringify(process.env.FIREBASE_WEB_APP_ID || "")},
+        measurementId: ${JSON.stringify(process.env.FIREBASE_WEB_MEASUREMENT_ID || "")}
       };
       try {
+        if (!firebaseConfig.apiKey || !firebaseConfig.appId) throw new Error("firebase web config missing");
         const app = initializeApp(firebaseConfig);
         window.__FB_APP__ = app;
         analyticsSupported().then(ok => { if (ok) { window.__FB_ANALYTICS__ = getAnalytics(app); } });
       } catch (e) {
-        console.warn("[firebase-client] init failed", e);
+        console.warn("[firebase-client] init skipped", e.message || e);
       }
     </script>
   </body>
@@ -1231,7 +1232,7 @@ function parseCookies(req) {
 }
 
 // HMAC-signed stateless token — survives Vercel cold starts (no DB lookup needed)
-const AUTH_SECRET = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "wizardzwork-default-secret-change-me";
+const AUTH_SECRET = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "whiteteakllc-default-secret-change-me";
 function signAuthToken(payload) {
   const data = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = crypto.createHmac("sha256", AUTH_SECRET).update(data).digest("base64url");
@@ -1318,7 +1319,7 @@ function clearSessionCookie(res) {
 }
 
 function isAdmin(user) {
-  return Boolean(user && (user.email === "admin@electrohub.local" || user.name === "Admin123"));
+  return Boolean(user && (user.email === ADMIN_SYNTHETIC_EMAIL || user.name === ADMIN_USERNAME));
 }
 
 if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
@@ -1326,7 +1327,9 @@ if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
 }
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-const ADMIN_SYNTHETIC_EMAIL = process.env.ADMIN_SYNTHETIC_EMAIL || "admin@electrohub.local";
+const ADMIN_SYNTHETIC_EMAIL = !process.env.ADMIN_SYNTHETIC_EMAIL || process.env.ADMIN_SYNTHETIC_EMAIL === "admin@electrohub.local"
+  ? "admin@whiteteakllc.com"
+  : process.env.ADMIN_SYNTHETIC_EMAIL;
 if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
   console.warn("[warn] ADMIN_USERNAME / ADMIN_PASSWORD not set. Admin login disabled. Copy .env.example to .env.");
 }
@@ -1702,7 +1705,7 @@ function legacyHomePage(user = null) {
   );
 
   return layout({
-    title: "WizardzWork | Electronics",
+    title: "WHITETEAKLLC | Electronics",
     description: "Multi-page electronics website with 50+ products, shopping cart, checkout, and order tracking.",
     currentPath: "/",
     user,
@@ -1922,7 +1925,7 @@ function homePage(user = null) {
   const slides = [
     {
       kicker: "Up to $200 off",
-      title: "WizardzWork Mobiles",
+      title: "WHITETEAKLLC Mobiles",
       subtitle: "iPhone 15, Galaxy S24, Pixel 9 Pro and more — premium smartphones, certified genuine.",
       cta: "Shop Mobiles",
       href: "/category/mobiles",
@@ -2024,8 +2027,8 @@ function homePage(user = null) {
     { label: "Over $2,000", href: "/products?minPrice=2000", bg: "linear-gradient(135deg,#ddd6fe,#c7d2fe)" }
   ];
   return layout({
-    title: "WizardzWork \u2014 Electronics reimagined",
-    description: "WizardzWork — your trusted modern electronics store for phones, laptops, audio and more.",
+    title: "WHITETEAKLLC \u2014 Electronics reimagined",
+    description: "WHITETEAKLLC — your trusted modern electronics store for phones, laptops, audio and more.",
     currentPath: "/",
     user,
     content: `
@@ -2074,7 +2077,7 @@ function homePage(user = null) {
         </section>
 
         <section class="mp-section mp-why mp-why-v2">
-          <div class="mp-section-head"><h2>Why shop WizardzWork</h2></div>
+          <div class="mp-section-head"><h2>Why shop WHITETEAKLLC</h2></div>
           <div class="mp-why-grid">
             <article class="mp-why-card mp-why-tile"><div class="mp-why-icon" aria-hidden="true">✓</div><h3>100% Genuine</h3><p>Every product sourced from brands and authorised distributors.</p></article>
             <article class="mp-why-card mp-why-tile"><div class="mp-why-icon" aria-hidden="true">⚡</div><h3>Free Delivery</h3><p>Fast, trackable shipping worldwide. No minimum order value.</p></article>
@@ -2115,7 +2118,7 @@ function homePage(user = null) {
         <section class="mp-section mp-news-section">
           <form class="mp-news-form" data-mp-newsletter>
             <div>
-              <h2>Join the WizardzWork newsletter</h2>
+              <h2>Join the WHITETEAKLLC newsletter</h2>
               <p>Early access to launches and subscriber-only discounts.</p>
             </div>
             <div class="mp-news-row">
@@ -2135,16 +2138,16 @@ function renderCromaFooter() {
     <footer class="cr-footer mp-footer">
       <div class="cr-footer-top">
         <div class="cr-footer-col cr-footer-brand">
-          <span class="mp-brand-mark" aria-hidden="true">W</span><span class="brand-word">WizardzWork</span>
+          <span class="mp-brand-mark" aria-hidden="true">WT</span><span class="brand-word">WHITETEAKLLC</span>
           <p>Your trusted destination for electronics, gadgets &amp; appliances.</p>
           <div class="cr-footer-social mp-social">
-            <a href="https://instagram.com/wizardzwork" aria-label="Instagram" target="_blank" rel="noopener"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor"/></svg></a>
-            <a href="https://youtube.com/@wizardzwork" aria-label="YouTube" target="_blank" rel="noopener"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M21.6 7.2a2.6 2.6 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4A2.6 2.6 0 0 0 2.4 7.2 27 27 0 0 0 2 12a27 27 0 0 0 .4 4.8 2.6 2.6 0 0 0 1.8 1.8C5.8 19 12 19 12 19s6.2 0 7.8-.4a2.6 2.6 0 0 0 1.8-1.8A27 27 0 0 0 22 12a27 27 0 0 0-.4-4.8ZM10 15V9l5 3Z"/></svg></a>
+            <a href="mailto:support@whiteteakllc.com" aria-label="Email support"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16v12H4z"/><path d="m4 8 8 6 8-6"/></svg></a>
+            <a href="tel:+971507143751" aria-label="Call WhiteTeak LLC"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.86 19.86 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.86 19.86 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.63 2.62a2 2 0 0 1-.45 2.11L8 9.91a16 16 0 0 0 6.09 6.09l1.46-1.29a2 2 0 0 1 2.11-.45c.84.3 1.72.51 2.62.63A2 2 0 0 1 22 16.92z"/></svg></a>
           </div>
         </div>
         <div class="cr-footer-col">
-          <h4>About WizardzWork</h4>
-          <a href="/about">About WizardzWork</a>
+          <h4>About WHITETEAKLLC</h4>
+          <a href="/about">About WHITETEAKLLC</a>
           <a href="/contact">Contact Us</a>
         </div>
         <div class="cr-footer-col">
@@ -2170,8 +2173,8 @@ function renderCromaFooter() {
         </div>
       </div>
       <div class="cr-footer-bottom">
-        <span>© 2026 SynapseEngine OÜ. All rights reserved.</span>
-        <span>Operating the WizardzWork brand</span>
+        <span>© 2026 WhiteTeak LLC. All rights reserved.</span>
+        <span>Operating the WHITETEAKLLC brand</span>
       </div>
     </footer>
   `;
@@ -2265,9 +2268,9 @@ function productsPage(url, forcedCategory = "", user = null) {
   const showConnectionFilter = category === "Headphones" || category === "Mouse";
 
   return layout({
-    title: category ? `${category} – WizardzWork` : "All Products – WizardzWork",
+    title: category ? `${category} – WHITETEAKLLC` : "All Products – WHITETEAKLLC",
     description: category
-      ? `Shop ${category} at WizardzWork — compare specs, prices, and ratings across top brands.`
+      ? `Shop ${category} at WHITETEAKLLC — compare specs, prices, and ratings across top brands.`
       : "Browse 120+ electronics — laptops, mobiles, headphones, and mouse — with free delivery.",
     currentPath: "/products",
     user,
@@ -2477,7 +2480,7 @@ function legacyProductDetailPage(slug, user = null) {
   ];
 
   return layout({
-    title: `${product.name} | WizardzWork`,
+    title: `${product.name} | WHITETEAKLLC`,
     description: product.description,
     currentPath: "/products",
     user,
@@ -2558,7 +2561,7 @@ function legacyProductDetailPage(slug, user = null) {
             ${specs.map((spec) => `<div class="summary-line border-row"><span>${escapeHtml(spec)}</span><strong>Included</strong></div>`).join("")}
           </article>
           <article class="panel-card">
-            <h2>Why buy from WizardzWork</h2>
+            <h2>Why buy from WHITETEAKLLC</h2>
             <div class="summary-line border-row"><span>Installation & guidance</span><strong>Available</strong></div>
             <div class="summary-line border-row"><span>Secure checkout</span><strong>Enabled</strong></div>
             <div class="summary-line border-row"><span>Order tracking</span><strong>Live</strong></div>
@@ -2620,7 +2623,7 @@ function productDetailPageLegacyV2(slug, user = null) {
   ];
 
   return layout({
-    title: `${product.name} | WizardzWork`,
+    title: `${product.name} | WHITETEAKLLC`,
     description: product.description,
     currentPath: "/products",
     user,
@@ -2858,7 +2861,7 @@ function productDetailPageLegacyV3(slug, user = null) {
   ];
 
   return layout({
-    title: `${product.name} | WizardzWork`,
+    title: `${product.name} | WHITETEAKLLC`,
     description: product.description,
     currentPath: "/products",
     user,
@@ -3062,7 +3065,7 @@ function productDetailPageCleanLegacyV4(slug, user = null) {
   const galleryItems = product.images.slice(0, 3);
 
   return layout({
-    title: `${product.name} | WizardzWork`,
+    title: `${product.name} | WHITETEAKLLC`,
     description: product.description,
     currentPath: "/products",
     user,
@@ -3231,7 +3234,7 @@ function productDetailPage(slug, user = null) {
   const keyFeatures = specs.slice(0, 6);
 
   return layout({
-    title: `${product.name} – WizardzWork`,
+    title: `${product.name} – WHITETEAKLLC`,
     description: String(product.description || "").slice(0, 150),
     ogImage: product.image,
     currentPath: "/products",
@@ -3414,8 +3417,8 @@ function productDetailPage(slug, user = null) {
 
 function cartPage(user = null) {
   return layout({
-    title: "Cart – WizardzWork",
-    description: "Review items in your WizardzWork cart before checkout. Free delivery and easy 30-day returns.",
+    title: "Cart – WHITETEAKLLC",
+    description: "Review items in your WHITETEAKLLC cart before checkout. Free delivery and easy 30-day returns.",
     currentPath: "/cart",
     user,
     content: `
@@ -3465,7 +3468,7 @@ function cartPage(user = null) {
 function checkoutPage(user = null) {
   const rzpReady = razorpayConfigured();
   return layout({
-    title: "Checkout – WizardzWork",
+    title: "Checkout – WHITETEAKLLC",
     description: "Secure checkout with Razorpay test-mode payments, COD fallback, and instant order tracking.",
     currentPath: "/cart",
     user,
@@ -3545,7 +3548,7 @@ function checkoutPage(user = null) {
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="wise"><span>Wise (Bank Transfer)</span></label>
             <div class="mp-wise-box" data-mp-wise hidden>
               <p><strong>Wise bank transfer instructions</strong></p>
-              <p>Account name: SynapseEngine OÜ<br>Wise email: payments@wizardzwork.com<br>Reference: your email on file</p>
+              <p>Account name: WhiteTeak LLC<br>Wise email: admin@whiteteakllc.com<br>Reference: your email on file</p>
             </div>
             <div class="cr-co-actions">
               <button type="button" class="cr-co-back" data-cr-back>Back</button>
@@ -3570,7 +3573,7 @@ function checkoutPage(user = null) {
 
 function trackPage(prefill = "", user = null) {
   return layout({
-    title: "Track Order | WizardzWork",
+    title: "Track Order | WHITETEAKLLC",
     currentPath: "/track",
     user,
     content: `
@@ -3638,8 +3641,8 @@ function authPage({ message = "", email = "", verified = false, error = "", next
   const nextNotice = next ? `<div class="eo-auth-banner">Please login to access your ${/checkout/i.test(next) ? "checkout" : "cart"}.</div>` : "";
   const loginAction = next ? `/auth/login?next=${encodeURIComponent(next)}` : "/auth/login";
   return layout({
-    title: "Login – WizardzWork",
-    description: "Sign in to your WizardzWork account to access your cart, orders, and saved items.",
+    title: "Login – WHITETEAKLLC",
+    description: "Sign in to your WHITETEAKLLC account to access your cart, orders, and saved items.",
     currentPath: "/login",
     user,
     content: `
@@ -3682,8 +3685,8 @@ function authPage({ message = "", email = "", verified = false, error = "", next
 
 function forgotPasswordPage({ message = "", error = "", email = "" } = {}, user = null) {
   return layout({
-    title: "Forgot password – WizardzWork",
-    description: "Reset your WizardzWork account password using an OTP sent to your registered email.",
+    title: "Forgot password – WHITETEAKLLC",
+    description: "Reset your WHITETEAKLLC account password using an OTP sent to your registered email.",
     currentPath: "/forgot-password",
     user,
     content: `
@@ -3724,8 +3727,8 @@ function resetPasswordPage({ message = "", error = "", email = "", devOtp = "", 
     </div>` : "";
   const phoneLine = maskedPhone ? `<p class="eo-auth-sub" style="margin-top:4px;font-size:13px;color:#666">Registered mobile on file: <strong>${escapeHtml(maskedPhone)}</strong> (SMS delivery coming soon — use the email OTP for now).</p>` : "";
   return layout({
-    title: "Reset password – WizardzWork",
-    description: "Enter the OTP and choose a new password for your WizardzWork account.",
+    title: "Reset password – WHITETEAKLLC",
+    description: "Enter the OTP and choose a new password for your WHITETEAKLLC account.",
     currentPath: "/auth/reset-password",
     user,
     content: `
@@ -3766,7 +3769,7 @@ function resetPasswordPage({ message = "", error = "", email = "", devOtp = "", 
 
 function signupPage({ message = "", error = "", name = "", email = "" } = {}, user = null) {
   return layout({
-    title: "Sign up | WizardzWork",
+    title: "Sign up | WHITETEAKLLC",
     currentPath: "/signup",
     user,
     content: `
@@ -3775,7 +3778,7 @@ function signupPage({ message = "", error = "", name = "", email = "" } = {}, us
         <section class="eo-auth-split">
           <aside class="eo-auth-left eo-auth-left-alt">
             <div class="eo-auth-left-inner">
-              <h2 class="eo-auth-tag">Join WizardzWork</h2>
+              <h2 class="eo-auth-tag">Join WHITETEAKLLC</h2>
               <p class="eo-auth-tag-sub">Create your free account in under a minute. Verify via email OTP and start shopping instantly.</p>
               <div class="eo-auth-illus" aria-hidden="true">
                 <span></span><span></span><span></span>
@@ -3814,7 +3817,7 @@ function signupSuccessPage(email, user = null, devInfo = null, opts = {}) {
   ` : "";
   const errorBanner = error ? `<div class="eo-auth-banner eo-auth-error" style="margin-bottom:12px">${escapeHtml(error)}</div>` : "";
   return layout({
-    title: "Verify your email | WizardzWork",
+    title: "Verify your email | WHITETEAKLLC",
     currentPath: "/signup",
     user,
     content: `
@@ -3844,7 +3847,7 @@ function signupSuccessPage(email, user = null, devInfo = null, opts = {}) {
 
 function adminLoginPage({ error = "" } = {}) {
   return layout({
-    title: "Admin Login | WizardzWork",
+    title: "Admin Login | WHITETEAKLLC",
     currentPath: "/admin/login",
     user: null,
     content: `
@@ -3888,7 +3891,7 @@ function accountPage(user) {
   } catch { wishRows = []; }
   const addr = (globalThis.__wwCtx && globalThis.__wwCtx.userAddress) || null;
   return layout({
-    title: "My Account | WizardzWork",
+    title: "My Account | WHITETEAKLLC",
     currentPath: "/account",
     user,
     content: `
@@ -4336,15 +4339,15 @@ function adminPage(user = null, opts = {}) {
     `<a class="${section === id && !searchResults ? "is-active" : ""}" href="${href}">${label}</a>`;
 
   return layout({
-    title: "Admin Dashboard – WizardzWork",
-    description: "WizardzWork admin dashboard — manage products, orders, customers, and users.",
+    title: "Admin Dashboard – WHITETEAKLLC",
+    description: "WHITETEAKLLC admin dashboard — manage products, orders, customers, and users.",
     currentPath: "/admin",
     user,
     content: `
       ${CR_HIDE_LEGACY_FOOTER_STYLE}
       <main class="cr-admin-shell">
         <aside class="cr-admin-sidebar" data-cr-admin-sidebar>
-          <div class="cr-admin-logo">WizardzWork <span>Admin</span></div>
+          <div class="cr-admin-logo">WHITETEAKLLC <span>Admin</span></div>
           <nav class="cr-admin-nav">
             ${navItem("/admin?section=dashboard", "Dashboard", "dashboard")}
             ${navItem("/admin?section=products", "Products", "products")}
@@ -4376,23 +4379,23 @@ function adminPage(user = null, opts = {}) {
 
 function aboutPage(user = null) {
   return layout({
-    title: "About WizardzWork",
-    description: "About WizardzWork — a direct-to-consumer electronics platform operated by SynapseEngine OÜ.",
+    title: "About WHITETEAKLLC",
+    description: "About WHITETEAKLLC — a direct-to-consumer electronics platform operated by WhiteTeak LLC.",
     currentPath: "/about",
     user,
     content: `
       <main class="mp-page mp-about-v2">
         <section class="mp-about-grid">
           <div class="mp-about-col-text">
-            <span class="mp-eyebrow">About WizardzWork</span>
+            <span class="mp-eyebrow">About WHITETEAKLLC</span>
             <h1>Technology, made human.</h1>
-            <p class="mp-about-lede">WizardzWork is a single-vendor, direct-to-consumer electronics platform operated by <strong>SynapseEngine OÜ</strong>. We showcase, manage, and sell our own catalogue of electronics — not a marketplace, not a reseller network — so we stay accountable for every product, price, and post-purchase interaction.</p>
+            <p class="mp-about-lede">WHITETEAKLLC is a single-vendor, direct-to-consumer electronics platform operated by <strong>WhiteTeak LLC</strong>. We showcase, manage, and sell our own catalogue of electronics — not a marketplace, not a reseller network — so we stay accountable for every product, price, and post-purchase interaction.</p>
 
             <h2>Our story</h2>
-            <p>WizardzWork began in 2018 with a simple frustration: buying electronics shouldn't feel like decoding a spec sheet. Our founding team was helping a family member pick a laptop for engineering college. Every site repeated the same specs — 15.6" FHD, 8GB DDR4, 512GB SSD — and none answered the one question that actually mattered: <em>"Will this still feel fast two years from now?"</em></p>
-            <p>That evening, over chai in Koramangala, the idea for WizardzWork took shape on a paper napkin. What if buying a laptop could feel as clear as buying a pair of running shoes — where the store helps you understand fit, purpose, and trade-offs before you look at the price?</p>
-            <p>Our first product wasn't a laptop. It was a comparison page: twelve models, three use cases, and an honest verdict for each. We shared it in three WhatsApp groups. Within a month, strangers were forwarding it. Within a quarter, customers asked us to sell the products ourselves. By 2023 we'd rebuilt the whole stack on a single thesis: every page on WizardzWork should feel like it was designed by someone who actually shops here.</p>
-            <p>In 2025 we incorporated as <strong>SynapseEngine OÜ</strong> in Estonia to give WizardzWork a transparent legal home — a stable entity that stands behind every warranty claim, refund, and data-protection request. Our merchant of record, our engineering team, and our customer-support humans all sit under that single roof.</p>
+            <p>WHITETEAKLLC began in 2018 with a simple frustration: buying electronics shouldn't feel like decoding a spec sheet. Our founding team was helping a family member pick a laptop for engineering college. Every site repeated the same specs — 15.6" FHD, 8GB DDR4, 512GB SSD — and none answered the one question that actually mattered: <em>"Will this still feel fast two years from now?"</em></p>
+            <p>That evening, over chai in Koramangala, the idea for WHITETEAKLLC took shape on a paper napkin. What if buying a laptop could feel as clear as buying a pair of running shoes — where the store helps you understand fit, purpose, and trade-offs before you look at the price?</p>
+            <p>Our first product wasn't a laptop. It was a comparison page: twelve models, three use cases, and an honest verdict for each. We shared it in three WhatsApp groups. Within a month, strangers were forwarding it. Within a quarter, customers asked us to sell the products ourselves. By 2023 we'd rebuilt the whole stack on a single thesis: every page on WHITETEAKLLC should feel like it was designed by someone who actually shops here.</p>
+            <p>In 2025 we established <strong>WhiteTeak LLC</strong> in the United Arab Emirates to give WHITETEAKLLC a transparent legal home — a stable entity that stands behind every warranty claim, refund, and data-protection request. Our merchant of record, our engineering team, and our customer-support humans all sit under that single roof.</p>
 
             <h2>Our mission</h2>
             <p>To make great technology simple to choose and delightful to own. Every product we list is verified, every price we publish is honest, and every support conversation is handled by real humans who know the catalogue.</p>
@@ -4402,19 +4405,19 @@ function aboutPage(user = null) {
               <li><strong>Single-vendor, single standard.</strong> We own every SKU in our catalogue. No third-party sellers, no inconsistent quality — one standard applies everywhere.</li>
               <li><strong>Genuine only.</strong> We source directly from brands and authorised distributors — zero grey-market stock.</li>
               <li><strong>Transparent pricing.</strong> Transparent pricing in USD, no hidden fees or taxes at checkout.</li>
-              <li><strong>Real support.</strong> A real human on the other end of <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a> — 92% of queries resolved on first contact.</li>
+              <li><strong>Real support.</strong> A real human on the other end of <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a> — 92% of queries resolved on first contact.</li>
               <li><strong>Fair returns.</strong> A simple 30-day return window on eligible items, refunded to the original payment method.</li>
               <li><strong>Secure by default.</strong> TLS in transit, hashed passwords, PCI-compliant payments via Viva Wallet — we never store raw card data.</li>
             </ul>
 
             <h2>How to reach us</h2>
             <ul class="mp-about-list">
-              <li><strong>Legal entity:</strong> SynapseEngine OÜ (Estonia)</li>
-              <li><strong>Registered address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115</li>
-              <li><strong>Customer support:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-              <li><strong>Admin / business:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-              <li><strong>Phone:</strong> +37257052072</li>
-              <li><strong>Governing law:</strong> Republic of Estonia · Jurisdiction: Courts of Estonia</li>
+              <li><strong>Legal entity:</strong> WhiteTeak LLC</li>
+              <li><strong>Registered address:</strong> Sharjah Media City, Sharjah, UAE</li>
+              <li><strong>Customer support:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
+              <li><strong>Admin / business:</strong> <a href="mailto:admin@whiteteakllc.com">admin@whiteteakllc.com</a></li>
+              <li><strong>Phone:</strong> +971 50 714 3751</li>
+              <li><strong>Governing law:</strong> Laws of the United Arab Emirates · Jurisdiction: Courts of Sharjah, UAE</li>
             </ul>
 
             <p class="mp-about-foot">Related policies: <a href="/terms">Terms &amp; Conditions</a> · <a href="/privacy">Privacy</a> · <a href="/refund">Refund &amp; Returns</a> · <a href="/disclaimer">Disclaimer</a></p>
@@ -4432,8 +4435,8 @@ function aboutPage(user = null) {
 
 function termsPage(user = null) {
   return layout({
-    title: "Terms & Conditions | WizardzWork",
-    description: "WizardzWork terms and conditions governing use of our website and services.",
+    title: "Terms & Conditions | WHITETEAKLLC",
+    description: "WHITETEAKLLC terms and conditions governing use of our website and services.",
     currentPath: "/terms",
     user,
     content: `
@@ -4441,25 +4444,25 @@ function termsPage(user = null) {
         <section class="mp-page-hero">
           <span class="mp-eyebrow">Last updated: April 2026</span>
           <h1>Terms &amp; Conditions</h1>
-          <p>Welcome to <strong>WizardzWork</strong>, operated by <strong>SynapseEngine OÜ</strong> ("Company", "we", "us", or "our"). These Terms &amp; Conditions govern your use of our website, mobile interfaces, and services (collectively, the "Services").</p>
+          <p>Welcome to <strong>WHITETEAKLLC</strong>, operated by <strong>WhiteTeak LLC</strong> ("Company", "we", "us", or "our"). These Terms &amp; Conditions govern your use of our website, mobile interfaces, and services (collectively, the "Services").</p>
         </section>
         <section class="mp-prose">
           <h2>1. Acceptance of Terms</h2>
-          <p>By accessing or using WizardzWork, you agree to be bound by these Terms &amp; Conditions and our Privacy Policy. If you do not agree, please do not use our Services.</p>
+          <p>By accessing or using WHITETEAKLLC, you agree to be bound by these Terms &amp; Conditions and our Privacy Policy. If you do not agree, please do not use our Services.</p>
           <p>We may update these Terms at any time. Continued use after changes constitutes acceptance.</p>
 
           <h2>2. Company Information</h2>
           <ul>
-            <li><strong>Legal Entity:</strong> SynapseEngine OÜ</li>
-            <li><strong>Registered Country:</strong> Estonia</li>
-            <li><strong>Registered Address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115</li>
-            <li><strong>Phone:</strong> +37257052072</li>
-            <li><strong>Contact Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-            <li><strong>Admin Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
+            <li><strong>Legal Entity:</strong> WhiteTeak LLC</li>
+            <li><strong>Registered Country:</strong> United Arab Emirates</li>
+            <li><strong>Registered Address:</strong> Sharjah Media City, Sharjah, UAE</li>
+            <li><strong>Phone:</strong> +971 50 714 3751</li>
+            <li><strong>Contact Email:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
+            <li><strong>Admin Email:</strong> <a href="mailto:admin@whiteteakllc.com">admin@whiteteakllc.com</a></li>
           </ul>
 
           <h2>3. Eligibility</h2>
-          <p>You must be at least 18 years old and capable of entering a legally binding contract under applicable law. By using WizardzWork, you confirm that all information provided is accurate and that you are purchasing for personal use unless agreed otherwise.</p>
+          <p>You must be at least 18 years old and capable of entering a legally binding contract under applicable law. By using WHITETEAKLLC, you confirm that all information provided is accurate and that you are purchasing for personal use unless agreed otherwise.</p>
 
           <h2>4. Account Responsibility</h2>
           <p>You are responsible for maintaining the confidentiality of your account credentials and for all activities under your account. We may suspend or terminate accounts involved in:</p>
@@ -4516,7 +4519,7 @@ function termsPage(user = null) {
           <p>We reserve the right to investigate disputed payments and suspend accounts involved in fraudulent or abusive chargebacks.</p>
 
           <h2>13. Intellectual Property</h2>
-          <p>All content on WizardzWork is owned or licensed by SynapseEngine OÜ and protected under applicable laws. Unauthorized use is prohibited.</p>
+          <p>All content on WHITETEAKLLC is owned or licensed by WhiteTeak LLC and protected under applicable laws. Unauthorized use is prohibited.</p>
 
           <h2>14. Prohibited Use</h2>
           <p>Users must not:</p>
@@ -4526,27 +4529,27 @@ function termsPage(user = null) {
           <p>To the maximum extent permitted by law, liability is limited to the amount paid for the order. No liability for indirect or consequential damages.</p>
 
           <h2>16. Indemnification</h2>
-          <p>You agree to indemnify and hold harmless SynapseEngine OÜ from claims arising due to misuse of services or violation of these Terms.</p>
+          <p>You agree to indemnify and hold harmless WhiteTeak LLC from claims arising due to misuse of services or violation of these Terms.</p>
 
           <h2>17. Privacy</h2>
-          <p>Use of WizardzWork is also governed by our <a href="/privacy">Privacy Policy</a>.</p>
+          <p>Use of WHITETEAKLLC is also governed by our <a href="/privacy">Privacy Policy</a>.</p>
 
           <h2>18. Governing Law &amp; Jurisdiction</h2>
-          <p>These Terms are governed by the laws of the Republic of Estonia, where SynapseEngine OÜ is incorporated. All disputes fall under the jurisdiction of the Courts of Estonia. Parties agree to attempt mediation before litigation.</p>
+          <p>These Terms are governed by the laws of the United Arab Emirates. All disputes fall under the jurisdiction of the Courts of Sharjah, UAE. Parties agree to attempt mediation before litigation.</p>
 
           <h2>19. Grievance &amp; Compliance Officer</h2>
           <ul>
             <li><strong>Name:</strong> To be appointed</li>
-            <li><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
+            <li><strong>Email:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
             <li><strong>Response Time:</strong> 7–15 business days</li>
           </ul>
 
           <h2>20. Contact Us</h2>
           <p>For support or inquiries:</p>
           <ul>
-            <li>📧 <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-            <li>📧 <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-            <li>📞 +37257052072</li>
+            <li>📧 <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
+            <li>📧 <a href="mailto:admin@whiteteakllc.com">admin@whiteteakllc.com</a></li>
+            <li>📞 +971 50 714 3751</li>
           </ul>
         </section>
       </main>
@@ -4556,8 +4559,8 @@ function termsPage(user = null) {
 
 function privacyPage(user = null) {
   return layout({
-    title: "Privacy Policy | WizardzWork",
-    description: "How WizardzWork collects, uses and protects your personal data.",
+    title: "Privacy Policy | WHITETEAKLLC",
+    description: "How WHITETEAKLLC collects, uses and protects your personal data.",
     currentPath: "/privacy",
     user,
     content: `
@@ -4571,10 +4574,10 @@ function privacyPage(user = null) {
           <h2>1. Company Information</h2>
           <p>This Privacy Policy applies to services operated by:</p>
           <ul>
-            <li><strong>SynapseEngine OÜ</strong></li>
-            <li><strong>Registered Address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115, Estonia</li>
-            <li><strong>Phone:</strong> +37257052072</li>
-            <li><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
+            <li><strong>WhiteTeak LLC</strong></li>
+            <li><strong>Registered Address:</strong> Sharjah Media City, Sharjah, UAE</li>
+            <li><strong>Phone:</strong> +971 50 714 3751</li>
+            <li><strong>Email:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
           </ul>
 
           <h2>2. Data We Collect</h2>
@@ -4624,7 +4627,7 @@ function privacyPage(user = null) {
           <p>All partners operate under strict data-processing agreements.</p>
 
           <h2>8. International Data Transfers</h2>
-          <p>As a global business, your data may be processed outside your country, including in Estonia. We ensure appropriate safeguards are in place, such as secure infrastructure, contractual protections, and trusted service providers.</p>
+          <p>As a global business, your data may be processed outside your country, including in the United Arab Emirates and other regions where our service providers operate. We ensure appropriate safeguards are in place, such as secure infrastructure, contractual protections, and trusted service providers.</p>
 
           <h2>9. Security</h2>
           <p>We implement:</p>
@@ -4651,7 +4654,7 @@ function privacyPage(user = null) {
             <li>Request deletion</li>
             <li>Request data portability</li>
           </ul>
-          <p>Contact: <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a>. Response time: within 30 days.</p>
+          <p>Contact: <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a>. Response time: within 30 days.</p>
 
           <h2>12. Children's Privacy</h2>
           <p>Our services are not intended for children under 13. We do not knowingly collect such data.</p>
@@ -4664,9 +4667,9 @@ function privacyPage(user = null) {
 
           <h2>15. Contact &amp; Data Protection Officer</h2>
           <ul>
-            <li><strong>Data Protection Officer:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-            <li><strong>Support:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-            <li><strong>Phone:</strong> +37257052072</li>
+            <li><strong>Data Protection Officer:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
+            <li><strong>Support:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
+            <li><strong>Phone:</strong> +971 50 714 3751</li>
           </ul>
         </section>
       </main>
@@ -4676,8 +4679,8 @@ function privacyPage(user = null) {
 
 function disclaimerPage(user = null) {
   return layout({
-    title: "Disclaimer | WizardzWork",
-    description: "Disclaimer regarding product information, pricing and third-party links on WizardzWork.",
+    title: "Disclaimer | WHITETEAKLLC",
+    description: "Disclaimer regarding product information, pricing and third-party links on WHITETEAKLLC.",
     currentPath: "/disclaimer",
     user,
     content: `
@@ -4685,20 +4688,20 @@ function disclaimerPage(user = null) {
         <section class="mp-page-hero">
           <span class="mp-eyebrow">Last updated: April 2026</span>
           <h1>Disclaimer</h1>
-          <p>Important notes about the information shown on WizardzWork.</p>
+          <p>Important notes about the information shown on WHITETEAKLLC.</p>
         </section>
         <section class="mp-prose">
           <h2>1. Company Information</h2>
           <p>This website is operated by:</p>
           <ul>
-            <li><strong>SynapseEngine OÜ</strong></li>
-            <li><strong>Registered Address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115, Estonia</li>
-            <li><strong>Phone:</strong> +37257052072</li>
-            <li><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
+            <li><strong>WhiteTeak LLC</strong></li>
+            <li><strong>Registered Address:</strong> Sharjah Media City, Sharjah, UAE</li>
+            <li><strong>Phone:</strong> +971 50 714 3751</li>
+            <li><strong>Email:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
           </ul>
 
           <h2>2. Product Information</h2>
-          <p>Product descriptions, images, specifications, and features on WizardzWork are based on manufacturer data, official materials, and internal editorial inputs. While we aim for accuracy:</p>
+          <p>Product descriptions, images, specifications, and features on WHITETEAKLLC are based on manufacturer data, official materials, and internal editorial inputs. While we aim for accuracy:</p>
           <ul>
             <li>Manufacturers may change specifications without notice</li>
             <li>Region-specific variants may differ</li>
@@ -4707,7 +4710,7 @@ function disclaimerPage(user = null) {
           <p>For final and binding details, always refer to the official brand website and physical product packaging.</p>
 
           <h2>3. Pricing Accuracy</h2>
-          <p>We strive to maintain accurate pricing at all times. However, in case of typographical errors, system glitches, or incorrect currency conversions, WizardzWork reserves the right to:</p>
+          <p>We strive to maintain accurate pricing at all times. However, in case of typographical errors, system glitches, or incorrect currency conversions, WHITETEAKLLC reserves the right to:</p>
           <ul>
             <li>Cancel affected orders</li>
             <li>Refuse processing</li>
@@ -4718,7 +4721,7 @@ function disclaimerPage(user = null) {
           <p>All products are subject to availability. We reserve the right to discontinue products, limit quantities, or cancel orders due to stock issues.</p>
 
           <h2>5. Third-Party Links</h2>
-          <p>WizardzWork may include links to third-party websites such as brand manuals, warranty portals, and payment providers including Viva Wallet. We do not control or guarantee:</p>
+          <p>WHITETEAKLLC may include links to third-party websites such as brand manuals, warranty portals, and payment providers including Viva Wallet. We do not control or guarantee:</p>
           <ul>
             <li>Content accuracy</li>
             <li>Privacy practices</li>
@@ -4733,7 +4736,7 @@ function disclaimerPage(user = null) {
           <p>Unless explicitly stated:</p>
           <ul>
             <li>Warranties are provided by the product manufacturer</li>
-            <li>WizardzWork is not the warranty provider</li>
+            <li>WHITETEAKLLC is not the warranty provider</li>
           </ul>
           <p>We may assist with claims, but terms and coverage are defined by the manufacturer. Customers should retain their invoice and packaging.</p>
 
@@ -4741,10 +4744,10 @@ function disclaimerPage(user = null) {
           <p>Images are for representation only. Actual products may vary due to lighting, display settings, or manufacturer updates.</p>
 
           <h2>9. Product Compatibility</h2>
-          <p>Customers are responsible for ensuring compatibility with devices and correct specifications before purchase. WizardzWork is not liable for incompatibility issues.</p>
+          <p>Customers are responsible for ensuring compatibility with devices and correct specifications before purchase. WHITETEAKLLC is not liable for incompatibility issues.</p>
 
           <h2>10. Limitation of Liability</h2>
-          <p>To the maximum extent permitted by law, WizardzWork (SynapseEngine OÜ) shall not be liable for:</p>
+          <p>To the maximum extent permitted by law, WHITETEAKLLC (WhiteTeak LLC) shall not be liable for:</p>
           <ul>
             <li>Inaccuracies in product information</li>
             <li>Third-party content or links</li>
@@ -4761,8 +4764,8 @@ function disclaimerPage(user = null) {
           <h2>13. Contact</h2>
           <p>For questions or discrepancies:</p>
           <ul>
-            <li>📧 <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-            <li>📞 +37257052072</li>
+            <li>📧 <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
+            <li>📞 +971 50 714 3751</li>
           </ul>
         </section>
       </main>
@@ -4772,8 +4775,8 @@ function disclaimerPage(user = null) {
 
 function refundPage(user = null) {
   return layout({
-    title: "Refund & Returns | WizardzWork",
-    description: "WizardzWork's refund, returns, and exchange policy.",
+    title: "Refund & Returns | WHITETEAKLLC",
+    description: "WHITETEAKLLC's refund, returns, and exchange policy.",
     currentPath: "/refund",
     user,
     content: `
@@ -4787,10 +4790,10 @@ function refundPage(user = null) {
           <h2>1. Company Information</h2>
           <p>This policy is operated by:</p>
           <ul>
-            <li><strong>SynapseEngine OÜ</strong></li>
-            <li><strong>Registered Address:</strong> Harju maakond, Tallinn, Kesklinna linnaosa, Tartu mnt 67/1-13b, 10115, Estonia</li>
-            <li><strong>Phone:</strong> +37257052072</li>
-            <li><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
+            <li><strong>WhiteTeak LLC</strong></li>
+            <li><strong>Registered Address:</strong> Sharjah Media City, Sharjah, UAE</li>
+            <li><strong>Phone:</strong> +971 50 714 3751</li>
+            <li><strong>Email:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
           </ul>
 
           <h2>2. 30-Day Return Window</h2>
@@ -4882,8 +4885,8 @@ function refundPage(user = null) {
           <h2>14. Contact</h2>
           <p>Need help?</p>
           <ul>
-            <li>📧 <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></li>
-            <li>📞 +37257052072</li>
+            <li>📧 <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></li>
+            <li>📞 +971 50 714 3751</li>
           </ul>
         </section>
       </main>
@@ -4902,8 +4905,8 @@ function wishlistPage(user) {
     `).all(user.email).map(normalizeProduct);
   } catch { rows = []; }
   return layout({
-    title: "My Wishlist | WizardzWork",
-    description: "Your saved wishlist products on WizardzWork.",
+    title: "My Wishlist | WHITETEAKLLC",
+    description: "Your saved wishlist products on WHITETEAKLLC.",
     currentPath: "/wishlist",
     user,
     content: `
@@ -4940,27 +4943,27 @@ function wishlistPage(user) {
 
 function storyPage(user = null) {
   return layout({
-    title: "WizardzWork Story",
-    description: "The story behind WizardzWork.",
+    title: "WHITETEAKLLC Story",
+    description: "The story behind WHITETEAKLLC.",
     currentPath: "/story",
     user,
     content: `
       <main class="mp-page">
-        <section class="mp-page-hero mp-story-hero"><h1>Our Story</h1><p>Why we started WizardzWork, and where we're going next.</p></section>
+        <section class="mp-page-hero mp-story-hero"><h1>Our Story</h1><p>Why we started WHITETEAKLLC, and where we're going next.</p></section>
         <section class="mp-prose mp-story-prose">
           <h2>It started with a frustration</h2>
-          <p>WizardzWork began in 2018 with a simple frustration: buying electronics shouldn't feel like decoding a spec sheet. Our founding team was trying to pick out a laptop for a family member heading into engineering college. Every site told them the same thing — a 15.6" FHD IPS display, 8GB DDR4, 512GB NVMe SSD — and absolutely none of it answered the one question that actually mattered: "Will this laptop still feel fast two years from now?"</p>
-          <p>That evening, over chai at a small kiosk in Koramangala, the idea for WizardzWork took shape on the back of a paper napkin. What if buying a laptop could feel as clear as buying a pair of running shoes — where the store helps you understand fit, purpose, and trade-offs before you even look at the price?</p>
+          <p>WHITETEAKLLC began in 2018 with a simple frustration: buying electronics shouldn't feel like decoding a spec sheet. Our founding team was trying to pick out a laptop for a family member heading into engineering college. Every site told them the same thing — a 15.6" FHD IPS display, 8GB DDR4, 512GB NVMe SSD — and absolutely none of it answered the one question that actually mattered: "Will this laptop still feel fast two years from now?"</p>
+          <p>That evening, over chai at a small kiosk in Koramangala, the idea for WHITETEAKLLC took shape on the back of a paper napkin. What if buying a laptop could feel as clear as buying a pair of running shoes — where the store helps you understand fit, purpose, and trade-offs before you even look at the price?</p>
           <blockquote>"We didn't want to build another marketplace. We wanted to build a store where a 19-year-old and her 60-year-old grandfather could both walk away confident in what they just bought."</blockquote>
           <h2>Our first product</h2>
           <p>Our first product wasn't a laptop. It was a curated comparison page. Twelve laptops, three use cases, and a single honest verdict for each. We put it up on a free domain and shared the link in three WhatsApp groups. Within a week, people we'd never met were forwarding it to their friends. Within a month, manufacturers started asking to be listed. Within a quarter, we had our first paying customers asking if we'd just sell the thing to them directly.</p>
           <h2>Growing pains</h2>
           <p>The next two years were exactly as messy as every founder story claims. We onboarded the wrong inventory partner and lost six weeks of Diwali sales. We launched a mobile app that crashed on half of our users' phones and had to rewrite it from scratch. We hired too fast in 2021, then had to have the hardest conversations of our careers in early 2022. Each of those moments taught us something we couldn't have learned any other way: that honesty scales further than hustle, that slow software kills trust faster than high prices, and that the quality of a team matters far more than its size.</p>
-          <p>By 2023 we'd rebuilt the entire stack on a single thesis: every experience on WizardzWork — the homepage, the product page, the checkout, the support chat — should feel like it was designed by someone who actually shops here.</p>
+          <p>By 2023 we'd rebuilt the entire stack on a single thesis: every experience on WHITETEAKLLC — the homepage, the product page, the checkout, the support chat — should feel like it was designed by someone who actually shops here.</p>
           <h2>Today</h2>
-          <p>Today, WizardzWork serves customers across the globe. We list over ten thousand products across laptops, mobiles, headphones, wearables and accessories. Our editorial team publishes weekly buying guides, our support team resolves over 92% of queries on first contact, and our logistics partners deliver worldwide. None of those numbers are what we're proudest of — we're proudest of the handwritten notes our customers send us, and the fact that nearly seven out of ten WizardzWork customers come back within twelve months.</p>
+          <p>Today, WHITETEAKLLC serves customers across the globe. We list over ten thousand products across laptops, mobiles, headphones, wearables and accessories. Our editorial team publishes weekly buying guides, our support team resolves over 92% of queries on first contact, and our logistics partners deliver worldwide. None of those numbers are what we're proudest of — we're proudest of the handwritten notes our customers send us, and the fact that nearly seven out of ten WHITETEAKLLC customers come back within twelve months.</p>
           <h2>Where we're going</h2>
-          <p>Our vision for the next five years is ambitious and, we think, worth the work. We want WizardzWork to be the store that families everywhere turn to first — not because we're the cheapest or the flashiest, but because we're the most trustworthy. We're investing heavily in three areas: deeper editorial content so buyers have a real guide, not just a filter; better after-sales service including in-home setup and repair; and a small but growing lineup of WizardzWork-designed accessories built specifically for how everyday people actually use technology.</p>
+          <p>Our vision for the next five years is ambitious and, we think, worth the work. We want WHITETEAKLLC to be the store that families everywhere turn to first — not because we're the cheapest or the flashiest, but because we're the most trustworthy. We're investing heavily in three areas: deeper editorial content so buyers have a real guide, not just a filter; better after-sales service including in-home setup and repair; and a small but growing lineup of WHITETEAKLLC-designed accessories built specifically for how everyday people actually use technology.</p>
           <p>We know we won't get everything right. But we'll keep doing the thing that got us here — listening to our customers, telling the truth about what we sell, and earning trust one order at a time.</p>
         </section>
       </main>
@@ -4970,20 +4973,20 @@ function storyPage(user = null) {
 
 function storeLocatorPage(user = null) {
   return layout({
-    title: "Store Locator | WizardzWork",
+    title: "Store Locator | WHITETEAKLLC",
     currentPath: "/store-locator",
     user,
     content: `
       <main class="mp-page">
-        <section class="mp-page-hero"><h1>Store Locator</h1><p>Find a WizardzWork store near you.</p></section>
+        <section class="mp-page-hero"><h1>Store Locator</h1><p>Find a WHITETEAKLLC store near you.</p></section>
         <section class="mp-store-grid">
           <article class="mp-store-card">
-            <h3>WizardzWork Headquarters</h3>
-            <p>SynapseEngine OÜ, Tallinn, Republic of Estonia</p>
-            <p><strong>Hours:</strong> Mon–Fri, 09:00 – 18:00 EET</p>
-            <p><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></p>
+            <h3>WHITETEAKLLC Headquarters</h3>
+            <p>WhiteTeak LLC, Sharjah Media City, Sharjah, UAE</p>
+            <p><strong>Hours:</strong> Mon–Fri, 09:00 – 18:00 GST</p>
+            <p><strong>Email:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></p>
           </article>
-          <iframe src="https://www.google.com/maps?q=Tallinn,Estonia&output=embed" width="100%" height="400" style="border:0;border-radius:16px" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="WizardzWork HQ — Tallinn"></iframe>
+          <iframe src="https://www.google.com/maps?q=Sharjah Media City, Sharjah, UAE&output=embed" width="100%" height="400" style="border:0;border-radius:16px" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="WHITETEAKLLC HQ — Sharjah"></iframe>
         </section>
       </main>
     `
@@ -4992,18 +4995,18 @@ function storeLocatorPage(user = null) {
 
 function contactPage(user = null) {
   return layout({
-    title: "Contact Us | WizardzWork",
+    title: "Contact Us | WHITETEAKLLC",
     currentPath: "/contact",
     user,
     content: `
       <main class="mp-page mp-contact">
         <div class="mp-contact-grid">
           <section class="mp-contact-left">
-            <h1>Talk to WizardzWork</h1>
+            <h1>Talk to WHITETEAKLLC</h1>
             <p>We respond within a few hours on weekdays.</p>
-            <p><strong>Email:</strong> <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></p>
-            <p><strong>Phone:</strong> <a href="tel:+919999999999">+91 9999999999</a></p>
-            <iframe src="https://www.google.com/maps?q=Bangalore&output=embed" width="100%" height="260" style="border:0;border-radius:14px;margin-top:16px" loading="lazy" title="WizardzWork HQ"></iframe>
+            <p><strong>Email:</strong> <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></p>
+            <p><strong>Phone:</strong> <a href="tel:+971507143751">+971 50 714 3751</a></p>
+            <iframe src="https://www.google.com/maps?q=Sharjah Media City, Sharjah, UAE&output=embed" width="100%" height="260" style="border:0;border-radius:14px;margin-top:16px" loading="lazy" title="WHITETEAKLLC HQ"></iframe>
           </section>
           <section class="mp-contact-right">
             <form class="mp-contact-form" data-mp-contact-form>
@@ -5029,23 +5032,23 @@ function contactPage(user = null) {
 function servicesPage(user = null) {
   const services = [
     { t: "Repair", d: "Authorised repair for major brands with transparent quotes and genuine parts across laptops, mobiles and audio." },
-    { t: "Trade-in", d: "Exchange your old device for WizardzWork credit instantly — free pickup and fair valuations." },
+    { t: "Trade-in", d: "Exchange your old device for WHITETEAKLLC credit instantly — free pickup and fair valuations." },
     { t: "EMI Help", d: "Find the right EMI plan — bank cards, cardless, and no-cost EMI on eligible products across price bands." }
   ];
   return layout({
-    title: "Services | WizardzWork",
+    title: "Services | WHITETEAKLLC",
     currentPath: "/services",
     user,
     content: `
       <main class="mp-page">
-        <section class="mp-page-hero"><h1>WizardzWork Services</h1><p>End-to-end support before and after your purchase.</p></section>
+        <section class="mp-page-hero"><h1>WHITETEAKLLC Services</h1><p>End-to-end support before and after your purchase.</p></section>
         <section class="mp-services-grid">
           ${services.map(s => `<article class="mp-service-card"><h3>${escapeHtml(s.t)}</h3><p>${escapeHtml(s.d)}</p></article>`).join("")}
         </section>
         <section class="mp-prose">
           <h3>Need to reach us?</h3>
-          <p>Admin: <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></p>
-          <p>Support: <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a></p>
+          <p>Admin: <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></p>
+          <p>Support: <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></p>
         </section>
       </main>
     `
@@ -5179,7 +5182,7 @@ async function handleRequest(req, res) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>404 — Not Found | WizardzWork</title>
+<title>404 — Not Found | WHITETEAKLLC</title>
 <link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
 <style>
   *,*::before,*::after{box-sizing:border-box}
@@ -5198,16 +5201,16 @@ async function handleRequest(req, res) {
 </head>
 <body>
   <main class="card">
-    <div class="logo">W</div>
+    <div class="logo">WT</div>
     <h1>404</h1>
     <h2>We can't find that right now</h2>
-    <p>WizardzWork is temporarily unavailable while we work on something behind the scenes. The page you were looking for hasn't moved permanently — please check back again shortly.</p>
+    <p>WHITETEAKLLC is temporarily unavailable while we work on something behind the scenes. The page you were looking for hasn't moved permanently — please check back again shortly.</p>
     <p>Sorry for the interruption.</p>
     <div class="contact">
       <strong>Need help right now?</strong>
-      <span>Email us at <a href="mailto:admin@wizardzwork.com">admin@wizardzwork.com</a> and we'll get back to you as soon as possible.</span>
+      <span>Email us at <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a> and we'll get back to you as soon as possible.</span>
     </div>
-    <div class="footer">© 2026 SynapseEngine OÜ · WizardzWork</div>
+    <div class="footer">© 2026 WhiteTeak LLC · WHITETEAKLLC</div>
   </main>
 </body>
 </html>`);
@@ -5336,7 +5339,7 @@ async function handleRequest(req, res) {
           await transporter.sendMail({
             from: process.env.SMTP_FROM || process.env.SMTP_USER,
             to,
-            subject: "WizardzWork SMTP test",
+            subject: "WHITETEAKLLC SMTP test",
             text: "If you received this, SMTP is working."
           });
           out.send_ok = true;
@@ -6133,7 +6136,7 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // === WizardzWork new pages ===
+  // === WHITETEAKLLC new pages ===
   if (req.method === "GET" && pathname === "/about") { html(res, 200, aboutPage(currentUser)); return; }
   if (req.method === "GET" && pathname === "/contact") { html(res, 200, contactPage(currentUser)); return; }
   if (req.method === "GET" && pathname === "/services") { html(res, 200, servicesPage(currentUser)); return; }
@@ -6216,7 +6219,7 @@ async function handleRequest(req, res) {
           });
         } catch (_) {}
       }
-      try { await sendOtpEmail("admin@wizardzwork.com", `CONTACT from ${email}: ${subject}`); } catch { /* optional */ }
+      try { await sendOtpEmail("support@whiteteakllc.com", `CONTACT from ${email}: ${subject}`); } catch { /* optional */ }
       json(res, 200, { ok: true });
       return;
     } catch (e) { json(res, 400, { error: e.message }); return; }
@@ -6410,7 +6413,7 @@ module.exports = async (req, res) => {
 if (!IS_VERCEL) {
   initialize().then(() => {
     server.listen(PORT, () => {
-      console.log(`WizardzWork running at http://localhost:${PORT}`);
+      console.log(`WHITETEAKLLC running at http://localhost:${PORT}`);
     });
   }).catch((error) => {
     console.error(error);
