@@ -62,7 +62,7 @@ async function sendOtpEmail(email, otp, verifyLink = "") {
     replyTo: config.replyTo,
     to: email,
     subject: "Your WhiteTeak LLC verification code",
-    text: `Your WhiteTeak LLC OTP is ${otp}. It is valid for 10 minutes.${linkBlockText}\n\n— WhiteTeak LLC Team (support@whiteteakllc.com)`,
+    text: `Your WhiteTeak LLC OTP is ${otp}. It is valid for 10 minutes.${linkBlockText}\n\n— WhiteTeak LLC Team (admin@whiteteakllc.com)`,
     html: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;padding:24px">
              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
                <div style="width:36px;height:36px;border-radius:8px;background:linear-gradient(135deg,#0d9488,#0f766e);color:#fff;font-weight:800;display:inline-flex;align-items:center;justify-content:center;font-size:15px">WT</div>
@@ -74,7 +74,7 @@ async function sendOtpEmail(email, otp, verifyLink = "") {
              <p style="margin:14px 0 8px;color:#444">This code is valid for 10 minutes.</p>
              ${linkBlockHtml}
              <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
-             <p style="font-size:12px;color:#888">If you didn't request this, you can safely ignore this email. For help, reply to this email or contact <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a>.</p>
+             <p style="font-size:12px;color:#888">If you didn't request this, you can safely ignore this email. For account help, reply to this email or contact <a href="mailto:admin@whiteteakllc.com">admin@whiteteakllc.com</a>.</p>
            </div>`
   });
 

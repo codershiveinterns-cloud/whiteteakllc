@@ -5047,7 +5047,7 @@ function servicesPage(user = null) {
         </section>
         <section class="mp-prose">
           <h3>Need to reach us?</h3>
-          <p>Admin: <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></p>
+          <p>Admin: <a href="mailto:admin@whiteteakllc.com">admin@whiteteakllc.com</a></p>
           <p>Support: <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a></p>
         </section>
       </main>
