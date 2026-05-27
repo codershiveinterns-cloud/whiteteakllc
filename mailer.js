@@ -15,8 +15,8 @@ function getMailerConfig() {
   // field in a dashboard). Fall back to 465 if the value isn't a positive number.
   let port = Number(SMTP_PORT);
   if (!Number.isFinite(port) || port <= 0 || port > 65535) port = 465;
-  // Default sender: "WhiteTeak LLC Support <support@whiteteakllc.com>" if SMTP_FROM not set.
-  const from = SMTP_FROM || `WhiteTeak LLC Support <support@whiteteakllc.com>`;
+  // Default sender: "WhiteTeak LLC Admin <admin@whiteteakllc.com>" if SMTP_FROM not set.
+  const from = SMTP_FROM || `WhiteTeak LLC Admin <admin@whiteteakllc.com>`;
   const replyTo = SMTP_REPLY_TO || "admin@whiteteakllc.com";
   return {
     host: SMTP_HOST,

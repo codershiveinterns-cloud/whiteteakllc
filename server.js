@@ -5056,18 +5056,7 @@ function servicesPage(user = null) {
 }
 
 function notFoundPage(user = null) {
-  return layout({
-    title: "Page Not Found",
-    user,
-    content: `
-      <main class="section center-panel">
-        <div class="success-card">
-          <h1 class="page-title">Page not found</h1>
-          <a class="primary-button" href="/">Go home</a>
-        </div>
-      </main>
-    `
-  });
+  return homePage(user);
 }
 
 function json(res, statusCode, payload) {
@@ -5167,55 +5156,9 @@ function countWords(s) {
   return String(s || "").trim().split(/\s+/).filter(Boolean).length;
 }
 
-// Toggle to true to take the whole site offline (returns a plain 404 for every
-// non-static request). Flip back to false to restore.
-const SITE_OFFLINE = true;
-
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = decodeURIComponent(url.pathname);
-
-  if (SITE_OFFLINE) {
-    res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>404 — Not Found | WHITETEAKLLC</title>
-<link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
-<style>
-  *,*::before,*::after{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:linear-gradient(135deg,#0f172a 0%,#1e1b4b 100%);color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
-  .card{max-width:560px;width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:20px;padding:40px 32px;text-align:center;backdrop-filter:blur(6px)}
-  .logo{width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;font-weight:800;font-size:24px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:18px;letter-spacing:-1px}
-  h1{font-size:88px;margin:6px 0 0;font-weight:800;letter-spacing:-3px;background:linear-gradient(135deg,#a78bfa,#60a5fa);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;line-height:1}
-  h2{font-size:22px;margin:14px 0 6px;font-weight:700;color:#f1f5f9}
-  p{margin:8px 0;color:#94a3b8;line-height:1.6;font-size:15px}
-  .contact{margin-top:24px;padding:16px 20px;background:rgba(124,58,237,0.12);border:1px solid rgba(124,58,237,0.3);border-radius:12px}
-  .contact strong{color:#e2e8f0;display:block;margin-bottom:4px;font-size:14px}
-  a{color:#a78bfa;text-decoration:none;font-weight:600}
-  a:hover{text-decoration:underline}
-  .footer{margin-top:28px;font-size:12px;color:#64748b}
-</style>
-</head>
-<body>
-  <main class="card">
-    <div class="logo">WT</div>
-    <h1>404</h1>
-    <h2>We can't find that right now</h2>
-    <p>WHITETEAKLLC is temporarily unavailable while we work on something behind the scenes. The page you were looking for hasn't moved permanently — please check back again shortly.</p>
-    <p>Sorry for the interruption.</p>
-    <div class="contact">
-      <strong>Need help right now?</strong>
-      <span>Email us at <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a> and we'll get back to you as soon as possible.</span>
-    </div>
-    <div class="footer">© 2026 WhiteTeak LLC · WHITETEAKLLC</div>
-  </main>
-</body>
-</html>`);
-    return;
-  }
 
   const currentUser = await getCurrentUser(req);
   globalThis.__wwCtx = getRequestContext(req);
@@ -6382,7 +6325,8 @@ async function handleRequest(req, res) {
     return;
   }
 
-  html(res, 404, notFoundPage(currentUser));
+  res.writeHead(302, { Location: "/" });
+  res.end();
 }
 
 const server = http.createServer(async (req, res) => {
