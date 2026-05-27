@@ -5345,15 +5345,18 @@ function countWords(s) {
   return String(s || "").trim().split(/\s+/).filter(Boolean).length;
 }
 
-// Toggle to true to take the whole site offline (returns a plain 404 for every
-// non-static request). Flip back to false to restore.
+// Toggle to true to keep WizardzWork offline while allowing the WhiteTeakLLC storefront.
 const SITE_OFFLINE = true;
+
+function isWizardzWorkHost(hostname) {
+  return /wizardzwork/i.test(String(hostname || ""));
+}
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = decodeURIComponent(url.pathname);
 
-  if (SITE_OFFLINE) {
+  if (SITE_OFFLINE && isWizardzWorkHost(req.headers.host)) {
     res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!DOCTYPE html>
 <html lang="en">
