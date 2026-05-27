@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "restore:firestore": "node scripts/restore-firestore.js",
     "test": "echo \"No automated tests configured\""
   },
   "keywords": [],
