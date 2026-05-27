@@ -987,6 +987,8 @@
     }
 
     form.addEventListener("submit", async function (event) {
+      var selectedPay = (form.querySelector('input[name=pay]:checked') || {}).value || "cod";
+      if (selectedPay !== "stripe") return;
       event.preventDefault();
       event.stopImmediatePropagation();
       hideError();
@@ -1288,26 +1290,119 @@
     if (!shell) return;
     var statusEl = shell.querySelector("[data-mp-verify-status]");
     var wise = shell.querySelector("[data-mp-wise]");
+    var paypalReady = shell.getAttribute("data-paypal-ready") === "1";
+    var paypalClientId = shell.getAttribute("data-paypal-client-id") || "";
+    var paypalWrap = shell.querySelector("[data-paypal-button-wrap]");
+    var paypalButton = shell.querySelector("[data-paypal-button]");
+    var submitButton = shell.querySelector("[data-checkout-submit]");
+    var paypalRendered = false;
+    var paypalLoading = null;
     function setStatus(t, err) { if (!statusEl) return; statusEl.textContent = t || ""; statusEl.classList.toggle("is-error", !!err); }
-    shell.addEventListener("change", function (e) {
-      if (e.target && e.target.name === "pay") {
-        if (wise) wise.hidden = e.target.value !== "wise";
-      }
-    });
-    var form = shell.querySelector("[data-checkout-form]");
-    if (!form) return;
-    form.addEventListener("submit", function (e) {
-      var payVal = (form.querySelector('input[name=pay]:checked') || {}).value || "cod";
-      if (payVal === "cod") return;
-      e.preventDefault(); e.stopPropagation();
+    function getPayVal() {
+      return (form.querySelector('input[name=pay]:checked') || {}).value || "cod";
+    }
+    function getCheckoutOrder() {
       var data = Object.fromEntries(new FormData(form).entries());
       var cart = [];
       try { cart = JSON.parse(localStorage.getItem("wizardzwork-cart") || "[]"); } catch (_) {}
-      var items = cart.map(function (c) { return { id: c.id, quantity: c.quantity }; });
-      var order = { customerName: data.customerName, email: data.email, phone: data.phone, address: data.address, city: data.city, state: data.state, pincode: data.pincode, items: items };
-      var endpoint = payVal === "stripe" ? "/api/payment/stripe/create-session"
-                   : payVal === "paypal" ? "/api/payment/paypal/create-order"
-                   : "/api/payment/wise/confirm";
+      return {
+        customerName: data.customerName,
+        email: data.email,
+        phone: data.phone,
+        address: data.country ? (((data.address || "") + ", " + data.country)) : data.address,
+        city: data.city,
+        state: data.state,
+        pincode: data.pincode,
+        items: cart.map(function (c) { return { id: c.id, quantity: c.quantity }; })
+      };
+    }
+    function togglePaymentUi() {
+      var payVal = getPayVal();
+      if (wise) wise.hidden = payVal !== "wise";
+      var usePayPal = payVal === "paypal" && paypalReady;
+      if (paypalWrap) paypalWrap.hidden = !usePayPal;
+      if (submitButton) submitButton.hidden = usePayPal;
+      if (usePayPal) renderPayPalButtons();
+    }
+    function loadPayPalSdk() {
+      if (window.paypal) return Promise.resolve();
+      if (paypalLoading) return paypalLoading;
+      paypalLoading = new Promise(function (resolve, reject) {
+        if (!paypalClientId) { reject(new Error("PayPal client ID missing")); return; }
+        var s = document.createElement("script");
+        s.src = "https://www.paypal.com/sdk/js?client-id=" + encodeURIComponent(paypalClientId) + "&currency=USD&intent=capture";
+        s.onload = function () { resolve(); };
+        s.onerror = function () { reject(new Error("Failed to load PayPal SDK")); };
+        document.head.appendChild(s);
+      });
+      return paypalLoading;
+    }
+    function renderPayPalButtons() {
+      if (!paypalReady || !paypalButton || paypalRendered) return;
+      loadPayPalSdk().then(function () {
+        if (!window.paypal || paypalRendered) return;
+        window.paypal.Buttons({
+          createOrder: function () {
+            var order = getCheckoutOrder();
+            return fetch("/api/payment/paypal/create-order", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ order: order })
+            }).then(function (r) {
+              return r.json().then(function (j) {
+                if (!r.ok || !j.ok || !j.paypalOrderId) throw new Error(j.error || "Could not create PayPal order");
+                setStatus("");
+                return j.paypalOrderId;
+              });
+            });
+          },
+          onApprove: function (data) {
+            var order = getCheckoutOrder();
+            return fetch("/api/payment/paypal/capture-order", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ paypalOrderId: data.orderID, order: order })
+            }).then(function (r) {
+              return r.json().then(function (j) {
+                if (!r.ok || !j.ok) throw new Error(j.error || "Could not capture PayPal payment");
+                try { localStorage.setItem("wizardzwork-cart", "[]"); } catch (_) {}
+                location.href = j.redirect || ("/order-success/" + encodeURIComponent(j.orderCode));
+              });
+            }).catch(function (err) {
+              setStatus(err.message || "Could not capture PayPal payment", true);
+              throw err;
+            });
+          },
+          onCancel: function () {
+            setStatus("Payment cancelled. You can retry when ready.", true);
+          },
+          onError: function (err) {
+            setStatus((err && err.message) || "PayPal payment failed", true);
+          }
+        }).render(paypalButton);
+        paypalRendered = true;
+      }).catch(function (err) {
+        setStatus(err.message || "Could not load PayPal", true);
+      });
+    }
+    shell.addEventListener("change", function (e) {
+      if (e.target && e.target.name === "pay") togglePaymentUi();
+    });
+    var form = shell.querySelector("[data-checkout-form]");
+    if (!form) return;
+    togglePaymentUi();
+    form.addEventListener("submit", function (e) {
+      var payVal = getPayVal();
+      if (payVal === "cod") return;
+      if (payVal === "paypal") {
+        e.preventDefault();
+        e.stopPropagation();
+        setStatus("Use the PayPal button to complete payment.", true);
+        return;
+      }
+      e.preventDefault(); e.stopPropagation();
+      var order = getCheckoutOrder();
+      var endpoint = payVal === "stripe" ? "/api/payment/stripe/create-session" : "/api/payment/wise/confirm";
       fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ order: order }) })
         .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (res) {

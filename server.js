@@ -142,6 +142,8 @@ db.exec(`
 
 ensureProductColumn("images_json", "TEXT NOT NULL DEFAULT '[]'");
 try { db.exec("ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'COD'"); } catch (_e) { /* exists */ }
+try { db.exec("ALTER TABLE orders ADD COLUMN paypal_order_id TEXT"); } catch (_e) { /* exists */ }
+try { db.exec("ALTER TABLE orders ADD COLUMN paypal_capture_id TEXT"); } catch (_e) { /* exists */ }
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS product_reviews (
@@ -785,6 +787,188 @@ function verifyRazorpaySignature(orderId, paymentId, signature) {
   } catch {
     return false;
   }
+}
+
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || "";
+const PAYPAL_SECRET = process.env.PAYPAL_SECRET || "";
+
+function paypalConfigured() {
+  return Boolean(PAYPAL_CLIENT_ID && PAYPAL_SECRET);
+}
+
+function getPayPalBaseUrl() {
+  return "https://api-m.paypal.com";
+}
+
+function paypalApiRequest(method, apiPath, payload = null, accessToken = "") {
+  return new Promise((resolve, reject) => {
+    if (!paypalConfigured()) {
+      reject(new Error("PayPal keys not configured"));
+      return;
+    }
+    const https = require("https");
+    const body = payload ? JSON.stringify(payload) : "";
+    const headers = {
+      "Content-Type": "application/json"
+    };
+    if (body) headers["Content-Length"] = Buffer.byteLength(body);
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`;
+    } else {
+      headers.Authorization = `Basic ${Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString("base64")}`;
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+    }
+    const url = new URL(apiPath, getPayPalBaseUrl());
+    const req = https.request({
+      hostname: url.hostname,
+      path: `${url.pathname}${url.search}`,
+      method,
+      headers
+    }, (res) => {
+      let chunks = "";
+      res.on("data", (c) => { chunks += c; });
+      res.on("end", () => {
+        try {
+          const parsed = chunks ? JSON.parse(chunks) : {};
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(parsed);
+          } else {
+            reject(new Error(parsed?.message || parsed?.error_description || `PayPal error (${res.statusCode})`));
+          }
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function getPayPalAccessToken() {
+  const https = require("https");
+  return new Promise((resolve, reject) => {
+    if (!paypalConfigured()) {
+      reject(new Error("PayPal keys not configured"));
+      return;
+    }
+    const body = "grant_type=client_credentials";
+    const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_SECRET}`).toString("base64");
+    const url = new URL("/v1/oauth2/token", getPayPalBaseUrl());
+    const req = https.request({
+      hostname: url.hostname,
+      path: url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Length": Buffer.byteLength(body),
+        Authorization: `Basic ${auth}`
+      }
+    }, (res) => {
+      let chunks = "";
+      res.on("data", (c) => { chunks += c; });
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(chunks || "{}");
+          if (res.statusCode >= 200 && res.statusCode < 300 && parsed.access_token) {
+            resolve(parsed.access_token);
+          } else {
+            reject(new Error(parsed?.error_description || parsed?.message || `PayPal auth error (${res.statusCode})`));
+          }
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function createPayPalOrder(total) {
+  const accessToken = await getPayPalAccessToken();
+  const value = Number(total || 0).toFixed(2);
+  return paypalApiRequest("POST", "/v2/checkout/orders", {
+    intent: "CAPTURE",
+    purchase_units: [
+      {
+        amount: {
+          currency_code: "USD",
+          value
+        }
+      }
+    ]
+  }, accessToken);
+}
+
+async function capturePayPalOrder(paypalOrderId) {
+  const accessToken = await getPayPalAccessToken();
+  return paypalApiRequest("POST", `/v2/checkout/orders/${encodeURIComponent(paypalOrderId)}/capture`, {}, accessToken);
+}
+
+function getRequiredCheckoutKeys() {
+  return ["customerName", "email", "phone", "address", "city", "state", "pincode", "items"];
+}
+
+function validateCheckoutPayload(payload) {
+  for (const key of getRequiredCheckoutKeys()) {
+    if (!payload[key] || (Array.isArray(payload[key]) && payload[key].length === 0)) {
+      throw new Error(`Missing ${key}`);
+    }
+  }
+}
+
+function hydrateOrderItems(itemsInput) {
+  return itemsInput.map((item) => {
+    const product = db.prepare("SELECT id, name, price, stock FROM products WHERE id = ?").get(item.id);
+    if (!product) throw new Error(`Product ${item.id} not found`);
+    const quantity = Math.max(1, Number(item.quantity || 1));
+    if (quantity > product.stock) throw new Error(`Only ${product.stock} units left for ${product.name}`);
+    return { id: product.id, name: product.name, price: product.price, quantity };
+  });
+}
+
+function computeOrderTotal(items) {
+  return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+}
+
+function createOrderCode() {
+  return `ORD-${1000 + Number(db.prepare("SELECT COUNT(*) AS count FROM orders").get().count) + 1}`;
+}
+
+async function persistOrder(o, items, status, paymentMethod = "COD", paymentMeta = {}) {
+  const orderCode = createOrderCode();
+  const total = computeOrderTotal(items);
+  db.prepare(`
+    INSERT INTO orders
+    (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at, payment_method, paypal_order_id, paypal_capture_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    orderCode,
+    o.customerName,
+    String(o.email).toLowerCase(),
+    o.phone,
+    o.address,
+    o.city,
+    o.state,
+    o.pincode,
+    status,
+    total,
+    JSON.stringify(items),
+    new Date().toISOString(),
+    paymentMethod,
+    paymentMeta.paypalOrderId || null,
+    paymentMeta.paypalCaptureId || null
+  );
+  const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
+  for (const item of items) reduceStock.run(item.quantity, item.id);
+  if (fbMirror) {
+    const mirrored = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode);
+    if (mirrored) { try { await fbMirror.mirrorOrder(mirrored); } catch (_) {} }
+  }
+  return { orderCode, total };
 }
 
 function currency(value) {
@@ -3467,14 +3651,15 @@ function cartPage(user = null) {
 
 function checkoutPage(user = null) {
   const rzpReady = razorpayConfigured();
+  const paypalReady = paypalConfigured();
   return layout({
     title: "Checkout – WHITETEAKLLC",
-    description: "Secure checkout with Razorpay test-mode payments, COD fallback, and instant order tracking.",
+    description: "Secure checkout with live PayPal payments, Razorpay support, COD fallback, and instant order tracking.",
     currentPath: "/cart",
     user,
     content: `
       ${CR_HIDE_LEGACY_FOOTER_STYLE}
-      <main class="cr-co-shell" data-rzp-ready="${rzpReady ? "1" : "0"}" data-rzp-key="${escapeHtml(RAZORPAY_KEY_ID || "")}">
+      <main class="cr-co-shell" data-rzp-ready="${rzpReady ? "1" : "0"}" data-rzp-key="${escapeHtml(RAZORPAY_KEY_ID || "")}" data-paypal-ready="${paypalReady ? "1" : "0"}" data-paypal-client-id="${escapeHtml(PAYPAL_CLIENT_ID || "")}">
         <header class="cr-co-header">
           <h1>Checkout</h1>
         </header>
@@ -3534,7 +3719,7 @@ function checkoutPage(user = null) {
             <p class="mp-verify-status" data-mp-verify-status></p>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="cod" checked><span>Cash on Delivery</span></label>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="stripe"><span>Stripe (Card)</span></label>
-            <label class="cr-co-pay-option"><input type="radio" name="pay" value="paypal"><span>PayPal</span></label>
+            <label class="cr-co-pay-option"><input type="radio" name="pay" value="paypal" ${paypalReady ? "" : "disabled"}><span>PayPal${paypalReady ? "" : " (Unavailable)"}</span></label>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="wise"><span>Wise (Bank Transfer)</span></label>
             <div class="mp-wise-box" data-mp-wise hidden>
               <p><strong>Wise bank transfer instructions</strong></p>
@@ -3549,9 +3734,12 @@ function checkoutPage(user = null) {
           <section class="cr-co-step" data-step-body="3">
             <h2>Review & Place Order</h2>
             <p class="cr-co-review-note">Confirm your details and place the order.</p>
+            <div class="cr-co-paypal-wrap" data-paypal-button-wrap hidden>
+              <div data-paypal-button></div>
+            </div>
             <div class="cr-co-actions">
               <button type="button" class="cr-co-back" data-cr-back>Back</button>
-              <button class="cr-co-place" type="submit">Place Order</button>
+              <button class="cr-co-place" type="submit" data-checkout-submit>Place Order</button>
             </div>
             <p class="cr-co-message subtle" data-checkout-message></p>
           </section>
@@ -5677,62 +5865,79 @@ async function handleRequest(req, res) {
     try {
       const raw = await readBody(req);
       const payload = JSON.parse(raw || "{}");
-      const required = ["customerName", "email", "phone", "address", "city", "state", "pincode", "items"];
-
-      for (const key of required) {
-        if (!payload[key] || (Array.isArray(payload[key]) && payload[key].length === 0)) {
-          json(res, 400, { error: `Missing ${key}` });
-          return;
-        }
-      }
-      const items = payload.items.map((item) => {
-        const product = db.prepare("SELECT id, name, price, stock FROM products WHERE id = ?").get(item.id);
-        if (!product) {
-          throw new Error(`Product ${item.id} not found`);
-        }
-        const quantity = Math.max(1, Number(item.quantity || 1));
-        if (quantity > product.stock) {
-          throw new Error(`Only ${product.stock} units left for ${product.name}`);
-        }
-        return { id: product.id, name: product.name, price: product.price, quantity };
-      });
-
-      const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      const orderCode = `ORD-${1000 + Number(db.prepare("SELECT COUNT(*) AS count FROM orders").get().count) + 1}`;
-      const insert = db.prepare(`
-        INSERT INTO orders
-        (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?)
-      `);
-
-      insert.run(
-        orderCode,
-        payload.customerName,
-        String(payload.email).toLowerCase(),
-        payload.phone,
-        payload.address,
-        payload.city,
-        payload.state,
-        payload.pincode,
-        total,
-        JSON.stringify(items),
-        new Date().toISOString()
-      );
-
-      const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
-      for (const item of items) {
-        reduceStock.run(item.quantity, item.id);
-      }
-
-      if (fbMirror) {
-        const mirrored = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode);
-        if (mirrored) { try { await fbMirror.mirrorOrder(mirrored); } catch (_) {} }
-      }
-
-      json(res, 201, { orderCode });
+      validateCheckoutPayload(payload);
+      const items = hydrateOrderItems(payload.items);
+      const saved = await persistOrder(payload, items, "Pending", "COD");
+      json(res, 201, { orderCode: saved.orderCode });
       return;
     } catch (error) {
       json(res, 400, { error: error.message || "Could not create order" });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/payment/paypal/create-order") {
+    try {
+      if (!paypalConfigured()) {
+        json(res, 503, { error: "PayPal not configured" });
+        return;
+      }
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const order = payload.order || payload;
+      validateCheckoutPayload(order);
+      const items = hydrateOrderItems(order.items);
+      const total = computeOrderTotal(items);
+      const paypalOrder = await createPayPalOrder(total);
+      json(res, 200, { ok: true, paypalOrderId: paypalOrder.id });
+      return;
+    } catch (error) {
+      json(res, 400, { error: error.message || "Could not create PayPal order" });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/payment/paypal/capture-order") {
+    try {
+      if (!paypalConfigured()) {
+        json(res, 503, { error: "PayPal not configured" });
+        return;
+      }
+      const payload = JSON.parse(await readBody(req) || "{}");
+      const paypalOrderId = String(payload.paypalOrderId || "").trim();
+      const order = payload.order || {};
+      if (!paypalOrderId) {
+        json(res, 400, { error: "Missing paypalOrderId" });
+        return;
+      }
+      validateCheckoutPayload(order);
+      const capture = await capturePayPalOrder(paypalOrderId);
+      const purchaseUnit = Array.isArray(capture.purchase_units) ? capture.purchase_units[0] : null;
+      const payments = purchaseUnit && purchaseUnit.payments ? purchaseUnit.payments : null;
+      const captureEntry = payments && Array.isArray(payments.captures) ? payments.captures[0] : null;
+      if (capture.status !== "COMPLETED" && (!captureEntry || captureEntry.status !== "COMPLETED")) {
+        json(res, 400, { error: "PayPal capture was not completed" });
+        return;
+      }
+      const items = hydrateOrderItems(order.items);
+      const total = computeOrderTotal(items);
+      const capturedAmount = Number(captureEntry && captureEntry.amount && captureEntry.amount.value ? captureEntry.amount.value : purchaseUnit && purchaseUnit.amount && purchaseUnit.amount.value ? purchaseUnit.amount.value : 0);
+      if (!capturedAmount || Math.abs(capturedAmount - total) > 0.01) {
+        json(res, 400, { error: "Captured amount did not match order total" });
+        return;
+      }
+      const existing = db.prepare("SELECT order_code FROM orders WHERE paypal_order_id = ? OR paypal_capture_id = ? LIMIT 1").get(paypalOrderId, captureEntry && captureEntry.id ? captureEntry.id : paypalOrderId);
+      if (existing) {
+        json(res, 200, { ok: true, orderCode: existing.order_code, redirect: `/order-success/${encodeURIComponent(existing.order_code)}` });
+        return;
+      }
+      const saved = await persistOrder(order, items, "Paid", "paypal", {
+        paypalOrderId,
+        paypalCaptureId: captureEntry && captureEntry.id ? captureEntry.id : null
+      });
+      json(res, 201, { ok: true, orderCode: saved.orderCode, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
+      return;
+    } catch (error) {
+      json(res, 400, { error: error.message || "Could not capture PayPal order" });
       return;
     }
   }
@@ -5777,54 +5982,18 @@ async function handleRequest(req, res) {
         json(res, 400, { error: "Signature verification failed" });
         return;
       }
-      // Signature OK — create order in DB using provided shipping payload
       const o = order || {};
-      const required = ["customerName", "email", "phone", "address", "city", "state", "pincode", "items"];
-      for (const key of required) {
-        if (!o[key] || (Array.isArray(o[key]) && o[key].length === 0)) {
-          json(res, 400, { error: `Missing ${key}` });
-          return;
-        }
-      }
-      const items = o.items.map((item) => {
-        const product = db.prepare("SELECT id, name, price, stock FROM products WHERE id = ?").get(item.id);
-        if (!product) throw new Error(`Product ${item.id} not found`);
-        const quantity = Math.max(1, Number(item.quantity || 1));
-        if (quantity > product.stock) throw new Error(`Only ${product.stock} units left for ${product.name}`);
-        return { id: product.id, name: product.name, price: product.price, quantity };
-      });
-      const total = items.reduce((s, i) => s + i.price * i.quantity, 0);
-      const orderCode = `ORD-${1000 + Number(db.prepare("SELECT COUNT(*) AS count FROM orders").get().count) + 1}`;
-      db.prepare(`
-        INSERT INTO orders
-        (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Paid', ?, ?, ?)
-      `).run(
-        orderCode,
-        o.customerName,
-        String(o.email).toLowerCase(),
-        o.phone,
-        o.address,
-        o.city,
-        o.state,
-        o.pincode,
-        total,
-        JSON.stringify(items),
-        new Date().toISOString()
-      );
-      const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
-      for (const item of items) reduceStock.run(item.quantity, item.id);
-      if (fbMirror) {
-        const mirrored = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode);
-        if (mirrored) { try { await fbMirror.mirrorOrder(mirrored); } catch (_) {} }
-      }
-      json(res, 201, { orderCode, redirect: `/order-success/${encodeURIComponent(orderCode)}` });
+      validateCheckoutPayload(o);
+      const items = hydrateOrderItems(o.items);
+      const saved = await persistOrder(o, items, "Paid", "razorpay");
+      json(res, 201, { orderCode: saved.orderCode, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
       return;
     } catch (error) {
       json(res, 400, { error: error.message || "Payment verification failed" });
       return;
     }
   }
+
 
   if (req.method === "GET" && pathname.startsWith("/order-success/")) {
     html(res, 200, orderSuccessPage(pathname.split("/").pop(), currentUser));
@@ -6223,31 +6392,16 @@ async function handleRequest(req, res) {
   }
 
   // Payment stubs
-  if (req.method === "POST" && pathname.startsWith("/api/payment/") && (pathname.endsWith("/create-session") || pathname.endsWith("/create-order") || pathname.endsWith("/wise/confirm"))) {
+  if (req.method === "POST" && pathname.startsWith("/api/payment/") && (pathname.endsWith("/create-session") || pathname.endsWith("/wise/confirm"))) {
     try {
       const payload = JSON.parse(await readBody(req) || "{}");
-      const provider = pathname.includes("stripe") ? "stripe" : pathname.includes("paypal") ? "paypal" : "wise";
+      const provider = pathname.includes("stripe") ? "stripe" : "wise";
       const o = payload.order || payload;
-      const required = ["customerName", "email", "phone", "address", "city", "state", "pincode", "items"];
-      for (const k of required) {
-        if (!o[k] || (Array.isArray(o[k]) && o[k].length === 0)) { json(res, 400, { error: `Missing ${k}` }); return; }
-      }
-      const items = o.items.map((item) => {
-        const product = db.prepare("SELECT id, name, price, stock FROM products WHERE id = ?").get(item.id);
-        if (!product) throw new Error(`Product ${item.id} not found`);
-        const quantity = Math.max(1, Number(item.quantity || 1));
-        if (quantity > product.stock) throw new Error(`Only ${product.stock} units left for ${product.name}`);
-        return { id: product.id, name: product.name, price: product.price, quantity };
-      });
-      const total = items.reduce((s, i) => s + i.price * i.quantity, 0);
-      const orderCode = `ORD-${1000 + Number(db.prepare("SELECT COUNT(*) AS count FROM orders").get().count) + 1}`;
+      validateCheckoutPayload(o);
+      const items = hydrateOrderItems(o.items);
       const status = provider === "wise" ? "Awaiting payment confirmation" : "Paid";
-      db.prepare(`INSERT INTO orders (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        orderCode, o.customerName, String(o.email).toLowerCase(), o.phone, o.address, o.city, o.state, o.pincode, status, total, JSON.stringify(items), new Date().toISOString(), provider
-      );
-      const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
-      for (const it of items) reduceStock.run(it.quantity, it.id);
-      json(res, 200, { ok: true, orderCode, checkoutUrl: `/order-success/${encodeURIComponent(orderCode)}`, redirect: `/order-success/${encodeURIComponent(orderCode)}` });
+      const saved = await persistOrder(o, items, status, provider);
+      json(res, 200, { ok: true, orderCode: saved.orderCode, checkoutUrl: `/order-success/${encodeURIComponent(saved.orderCode)}`, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
       return;
     } catch (e) { json(res, 400, { error: e.message }); return; }
   }
