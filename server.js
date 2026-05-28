@@ -29,7 +29,6 @@ try { productsV2 = require("./data/products-v2.json"); } catch { productsV2 = []
 
 const PORT = process.env.PORT || 3000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
-const CAN_EXPOSE_DEV_OTP = !IS_VERCEL && String(process.env.NODE_ENV || "").toLowerCase() !== "production";
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = IS_VERCEL ? "/tmp" : path.join(ROOT, "data");
@@ -3898,12 +3897,7 @@ function forgotPasswordPage({ message = "", error = "", email = "" } = {}, user 
   });
 }
 
-function resetPasswordPage({ message = "", error = "", email = "", devOtp = "", maskedPhone = "" } = {}, user = null) {
-  const devHint = devOtp && CAN_EXPOSE_DEV_OTP ? `
-    <div style="margin-top:10px;padding:12px 14px;background:#fff8e1;border:1px solid #f7d774;border-radius:8px;color:#5b4500;font-size:13px">
-      <strong>Dev mode:</strong> SMTP not configured. Your OTP is
-      <code style="display:inline-block;padding:2px 8px;background:#fff;border-radius:4px;font-size:16px;letter-spacing:3px;font-weight:700">${escapeHtml(devOtp)}</code>
-    </div>` : "";
+function resetPasswordPage({ message = "", error = "", email = "", maskedPhone = "" } = {}, user = null) {
   const phoneLine = maskedPhone ? `<p class="eo-auth-sub" style="margin-top:4px;font-size:13px;color:#666">Registered mobile on file: <strong>${escapeHtml(maskedPhone)}</strong> (SMS delivery coming soon — use the email OTP for now).</p>` : "";
   return layout({
     title: "Reset password – WHITETEAKLLC",
@@ -3928,7 +3922,6 @@ function resetPasswordPage({ message = "", error = "", email = "", devOtp = "", 
               ${phoneLine}
               ${message ? `<div class="eo-auth-banner">${escapeHtml(message)}</div>` : ""}
               ${error ? `<div class="eo-auth-banner eo-auth-error">${escapeHtml(error)}</div>` : ""}
-              ${devHint}
               <form class="eo-auth-form" method="POST" action="/auth/reset-password">
                 <input type="hidden" name="email" value="${escapeHtml(email)}">
                 <label>6-digit OTP<input name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code"></label>
@@ -3986,15 +3979,13 @@ function signupPage({ message = "", error = "", name = "", email = "" } = {}, us
 }
 
 function signupSuccessPage(email, user = null, devInfo = null, opts = {}) {
-  const isDev = CAN_EXPOSE_DEV_OTP && devInfo && devInfo.mailResult && devInfo.mailResult.mode === "dev";
   const error = opts.error || "";
-  const devHint = isDev ? `
-    <div style="margin-top:14px;padding:12px 14px;background:#fff8e1;border:1px solid #f7d774;border-radius:8px;color:#5b4500;font-size:13px">
-      <strong>Dev mode:</strong> SMTP not configured, so the OTP wasn't emailed. Your code is
-      <code style="display:inline-block;padding:2px 8px;background:#fff;border-radius:4px;font-size:16px;letter-spacing:3px;font-weight:700">${escapeHtml(devInfo.otp)}</code>
-    </div>
-  ` : "";
+  const deliveryFailed = devInfo && devInfo.mailResult && !devInfo.mailResult.sent;
   const errorBanner = error ? `<div class="eo-auth-banner eo-auth-error" style="margin-bottom:12px">${escapeHtml(error)}</div>` : "";
+  const deliveryBanner = deliveryFailed ? `<div class="eo-auth-banner eo-auth-error" style="margin-bottom:12px">We couldn't send the OTP email. Please try again or contact support.</div>` : "";
+  const introText = deliveryFailed
+    ? `Enter the OTP below after email delivery is restored for <strong>${escapeHtml(email)}</strong>.`
+    : `We sent a 6-digit OTP to <strong>${escapeHtml(email)}</strong>. Enter it below to activate your account.`;
   return layout({
     title: "Verify your email | WHITETEAKLLC",
     currentPath: "/signup",
@@ -4006,7 +3997,8 @@ function signupSuccessPage(email, user = null, devInfo = null, opts = {}) {
           <div class="eo-auth-right" style="grid-column:1 / -1">
             <div class="eo-auth-card">
               <h1 class="eo-auth-title">Enter verification code</h1>
-              <p class="eo-auth-sub">We sent a 6-digit OTP to <strong>${escapeHtml(email)}</strong>. Enter it below to activate your account.</p>
+              <p class="eo-auth-sub">${introText}</p>
+              ${deliveryBanner}
               ${errorBanner}
               <form class="eo-auth-form" method="POST" action="/auth/verify-otp" style="margin-top:14px">
                 <input type="hidden" name="email" value="${escapeHtml(email)}">
@@ -4014,7 +4006,6 @@ function signupSuccessPage(email, user = null, devInfo = null, opts = {}) {
                 <input class="eo-auth-input" type="text" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus style="letter-spacing:8px;font-size:22px;text-align:center;font-weight:700">
                 <button class="eo-auth-btn" type="submit" style="margin-top:12px">Verify & continue</button>
               </form>
-              ${devHint}
               <p class="eo-auth-foot" style="margin-top:16px">Didn't get the code? <a href="/auth/resend-otp?email=${encodeURIComponent(email)}">Resend OTP</a></p>
             </div>
           </div>
@@ -5693,14 +5684,12 @@ async function handleRequest(req, res) {
         maskedPhone = p.length >= 4 ? p.slice(0, 2) + "•".repeat(Math.max(0, p.length - 4)) + p.slice(-2) : p;
       }
     } catch { /* phone optional */ }
-    const devOtp = mailResult.mode === "dev" && CAN_EXPOSE_DEV_OTP ? otp : "";
-    const mailMessage = mailResult.mode === "error"
+    const mailMessage = !mailResult.sent
       ? "We couldn't send the OTP email. Please try again or contact support."
       : "OTP sent. Please check your inbox (and spam folder).";
     html(res, 200, resetPasswordPage({
       email,
       message: mailMessage,
-      devOtp,
       maskedPhone
     }, currentUser));
     return;
@@ -5721,11 +5710,10 @@ async function handleRequest(req, res) {
     let mailResult = { sent: false, mode: "dev" };
     try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot-resend] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
     console.log(`[forgot-resend] reset OTP for ${email}: ${otp}`);
-    const devOtp = mailResult.mode === "dev" && CAN_EXPOSE_DEV_OTP ? otp : "";
-    const mailMessage = mailResult.mode === "error"
+    const mailMessage = !mailResult.sent
       ? "We couldn't send the OTP email. Please try again or contact support."
       : "A new OTP has been sent.";
-    html(res, 200, resetPasswordPage({ email, message: mailMessage, devOtp }, currentUser));
+    html(res, 200, resetPasswordPage({ email, message: mailMessage }, currentUser));
     return;
   }
 
