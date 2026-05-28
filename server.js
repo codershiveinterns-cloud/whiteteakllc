@@ -29,6 +29,7 @@ try { productsV2 = require("./data/products-v2.json"); } catch { productsV2 = []
 
 const PORT = process.env.PORT || 3000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
+const CAN_EXPOSE_DEV_OTP = !IS_VERCEL && String(process.env.NODE_ENV || "").toLowerCase() !== "production";
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = IS_VERCEL ? "/tmp" : path.join(ROOT, "data");
@@ -3898,7 +3899,7 @@ function forgotPasswordPage({ message = "", error = "", email = "" } = {}, user 
 }
 
 function resetPasswordPage({ message = "", error = "", email = "", devOtp = "", maskedPhone = "" } = {}, user = null) {
-  const devHint = devOtp ? `
+  const devHint = devOtp && CAN_EXPOSE_DEV_OTP ? `
     <div style="margin-top:10px;padding:12px 14px;background:#fff8e1;border:1px solid #f7d774;border-radius:8px;color:#5b4500;font-size:13px">
       <strong>Dev mode:</strong> SMTP not configured. Your OTP is
       <code style="display:inline-block;padding:2px 8px;background:#fff;border-radius:4px;font-size:16px;letter-spacing:3px;font-weight:700">${escapeHtml(devOtp)}</code>
@@ -3985,7 +3986,7 @@ function signupPage({ message = "", error = "", name = "", email = "" } = {}, us
 }
 
 function signupSuccessPage(email, user = null, devInfo = null, opts = {}) {
-  const isDev = devInfo && devInfo.mailResult && devInfo.mailResult.mode === "dev";
+  const isDev = CAN_EXPOSE_DEV_OTP && devInfo && devInfo.mailResult && devInfo.mailResult.mode === "dev";
   const error = opts.error || "";
   const devHint = isDev ? `
     <div style="margin-top:14px;padding:12px 14px;background:#fff8e1;border:1px solid #f7d774;border-radius:8px;color:#5b4500;font-size:13px">
@@ -5682,7 +5683,7 @@ async function handleRequest(req, res) {
     const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
     await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
     let mailResult = { sent: false, mode: "dev" };
-    try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot] mailer error:", e.message); }
+    try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
     console.log(`[forgot] reset OTP for ${email}: ${otp}`);
     let maskedPhone = "";
     try {
@@ -5692,10 +5693,13 @@ async function handleRequest(req, res) {
         maskedPhone = p.length >= 4 ? p.slice(0, 2) + "•".repeat(Math.max(0, p.length - 4)) + p.slice(-2) : p;
       }
     } catch { /* phone optional */ }
-    const devOtp = mailResult.mode === "dev" ? otp : "";
+    const devOtp = mailResult.mode === "dev" && CAN_EXPOSE_DEV_OTP ? otp : "";
+    const mailMessage = mailResult.mode === "error"
+      ? "We couldn't send the OTP email. Please try again or contact support."
+      : "OTP sent. Please check your inbox (and spam folder).";
     html(res, 200, resetPasswordPage({
       email,
-      message: "OTP sent. Please check your inbox (and spam folder).",
+      message: mailMessage,
       devOtp,
       maskedPhone
     }, currentUser));
@@ -5715,10 +5719,13 @@ async function handleRequest(req, res) {
     const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
     await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
     let mailResult = { sent: false, mode: "dev" };
-    try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot-resend] mailer error:", e.message); }
+    try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot-resend] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
     console.log(`[forgot-resend] reset OTP for ${email}: ${otp}`);
-    const devOtp = mailResult.mode === "dev" ? otp : "";
-    html(res, 200, resetPasswordPage({ email, message: "A new OTP has been sent.", devOtp }, currentUser));
+    const devOtp = mailResult.mode === "dev" && CAN_EXPOSE_DEV_OTP ? otp : "";
+    const mailMessage = mailResult.mode === "error"
+      ? "We couldn't send the OTP email. Please try again or contact support."
+      : "A new OTP has been sent.";
+    html(res, 200, resetPasswordPage({ email, message: mailMessage, devOtp }, currentUser));
     return;
   }
 
@@ -5781,7 +5788,7 @@ async function handleRequest(req, res) {
     const proto = req.headers["x-forwarded-proto"] || "http";
     const verifyLink = `${proto}://${host}/auth/verify?email=${encodeURIComponent(email)}&token=${otp}`;
     let mailResult = { sent: false, mode: "dev" };
-    try { mailResult = await sendOtpEmail(email, otp, verifyLink); } catch (e) { console.warn("[signup] mailer error:", e.message); }
+    try { mailResult = await sendOtpEmail(email, otp, verifyLink); } catch (e) { console.warn("[signup] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
     console.log(`[signup] OTP for ${email}: ${otp} — verify link: ${verifyLink}`);
     html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp, verifyLink }));
     return;
@@ -6118,7 +6125,7 @@ async function handleRequest(req, res) {
     const proto = req.headers["x-forwarded-proto"] || "http";
     const verifyLink = `${proto}://${host}/auth/verify?email=${encodeURIComponent(email)}&token=${otp}`;
     let mailResult = { sent: false, mode: "dev" };
-    try { mailResult = await sendOtpEmail(email, otp, verifyLink); } catch (e) { console.warn("[resend] mailer error:", e.message); }
+    try { mailResult = await sendOtpEmail(email, otp, verifyLink); } catch (e) { console.warn("[resend] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
     console.log(`[resend] OTP for ${email}: ${otp}`);
     html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp, verifyLink }, { error: "" }));
     return;
