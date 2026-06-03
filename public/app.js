@@ -1297,9 +1297,16 @@
     var paypalWrap = shell.querySelector("[data-paypal-button-wrap]");
     var paypalButton = shell.querySelector("[data-paypal-button]");
     var submitButton = shell.querySelector("[data-checkout-submit]");
+    var checkoutMessage = shell.querySelector("[data-checkout-message]");
     var paypalRendered = false;
     var paypalLoading = null;
-    function setStatus(t, err) { if (!statusEl) return; statusEl.textContent = t || ""; statusEl.classList.toggle("is-error", !!err); }
+    function setStatus(t, err) {
+      [statusEl, checkoutMessage].forEach(function (node) {
+        if (!node) return;
+        node.textContent = t || "";
+        node.classList.toggle("is-error", !!err);
+      });
+    }
     function getPayVal() {
       return (form.querySelector('input[name=pay]:checked') || {}).value || "cod";
     }
@@ -1345,7 +1352,15 @@
         if (!window.paypal || paypalRendered) return;
         window.paypal.Buttons({
           createOrder: function () {
+            if (form && !form.reportValidity()) {
+              setStatus("Please complete the highlighted checkout fields before PayPal payment.", true);
+              return Promise.reject(new Error("Checkout details are incomplete"));
+            }
             var order = getCheckoutOrder();
+            if (!order.items.length) {
+              setStatus("Your cart is empty.", true);
+              return Promise.reject(new Error("Your cart is empty"));
+            }
             return fetch("/api/payment/paypal/create-order", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1398,7 +1413,7 @@
       if (payVal === "cod") return;
       if (payVal === "paypal") {
         e.preventDefault();
-        e.stopPropagation();
+        e.stopImmediatePropagation();
         setStatus("Use the PayPal button to complete payment.", true);
         return;
       }
