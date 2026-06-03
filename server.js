@@ -3718,7 +3718,7 @@ function checkoutPage(user = null) {
             <h2>Payment Method</h2>
             <p class="mp-verify-status" data-mp-verify-status></p>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="cod" checked><span>Cash on Delivery</span></label>
-            <label class="cr-co-pay-option"><input type="radio" name="pay" value="stripe"><span>Stripe (Card)</span></label>
+            <label class="cr-co-pay-option"><input type="radio" name="pay" value="stripe" ${rzpReady ? "" : "disabled"}><span>Card${rzpReady ? "" : " (Unavailable)"}</span></label>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="paypal" ${paypalReady ? "" : "disabled"}><span>PayPal${paypalReady ? "" : " (Unavailable)"}</span></label>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="wise"><span>Wise (Bank Transfer)</span></label>
             <div class="mp-wise-box" data-mp-wise hidden>
@@ -5912,13 +5912,17 @@ async function handleRequest(req, res) {
       const purchaseUnit = Array.isArray(capture.purchase_units) ? capture.purchase_units[0] : null;
       const payments = purchaseUnit && purchaseUnit.payments ? purchaseUnit.payments : null;
       const captureEntry = payments && Array.isArray(payments.captures) ? payments.captures[0] : null;
-      if (capture.status !== "COMPLETED" && (!captureEntry || captureEntry.status !== "COMPLETED")) {
+      if (!captureEntry || captureEntry.status !== "COMPLETED") {
         json(res, 400, { error: "PayPal capture was not completed" });
         return;
       }
       const items = hydrateOrderItems(order.items);
       const total = computeOrderTotal(items);
-      const capturedAmount = Number(captureEntry && captureEntry.amount && captureEntry.amount.value ? captureEntry.amount.value : purchaseUnit && purchaseUnit.amount && purchaseUnit.amount.value ? purchaseUnit.amount.value : 0);
+      if (captureEntry.amount && captureEntry.amount.currency_code && captureEntry.amount.currency_code !== "USD") {
+        json(res, 400, { error: "Captured currency did not match checkout currency" });
+        return;
+      }
+      const capturedAmount = Number(captureEntry && captureEntry.amount && captureEntry.amount.value ? captureEntry.amount.value : 0);
       if (!capturedAmount || Math.abs(capturedAmount - total) > 0.01) {
         json(res, 400, { error: "Captured amount did not match order total" });
         return;
@@ -6389,16 +6393,19 @@ async function handleRequest(req, res) {
     } catch (e) { json(res, 400, { error: e.message }); return; }
   }
 
-  // Payment stubs
+  // Payment confirmations
   if (req.method === "POST" && pathname.startsWith("/api/payment/") && (pathname.endsWith("/create-session") || pathname.endsWith("/wise/confirm"))) {
     try {
       const payload = JSON.parse(await readBody(req) || "{}");
       const provider = pathname.includes("stripe") ? "stripe" : "wise";
+      if (provider === "stripe") {
+        json(res, 503, { error: "Card payments must be verified before an order can be marked paid. Please use the live card checkout or PayPal." });
+        return;
+      }
       const o = payload.order || payload;
       validateCheckoutPayload(o);
       const items = hydrateOrderItems(o.items);
-      const status = provider === "wise" ? "Awaiting payment confirmation" : "Paid";
-      const saved = await persistOrder(o, items, status, provider);
+      const saved = await persistOrder(o, items, "Awaiting payment confirmation", provider);
       json(res, 200, { ok: true, orderCode: saved.orderCode, checkoutUrl: `/order-success/${encodeURIComponent(saved.orderCode)}`, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
       return;
     } catch (e) { json(res, 400, { error: e.message }); return; }

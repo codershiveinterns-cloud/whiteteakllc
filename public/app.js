@@ -962,8 +962,6 @@
     var errorBanner = document.getElementById("eh-pay-error");
     var ready = shell.getAttribute("data-rzp-ready") === "1";
     var keyId = shell.getAttribute("data-rzp-key") || "";
-    if (!ready) return; // fall back to existing COD-style submit
-
     function loadCheckoutScript() {
       return new Promise(function (resolve, reject) {
         if (window.Razorpay) { resolve(); return; }
@@ -992,6 +990,10 @@
       event.preventDefault();
       event.stopImmediatePropagation();
       hideError();
+      if (!ready) {
+        showError("Card payment is not available right now. Please use PayPal or Cash on Delivery.");
+        return;
+      }
       var cart = [];
       try { cart = JSON.parse(localStorage.getItem("wizardzwork-cart") || "[]"); } catch (_) {}
       if (!cart.length) { showError("Your cart is empty."); return; }
