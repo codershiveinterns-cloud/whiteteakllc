@@ -534,19 +534,27 @@
         const rec = CITIES[key];
         if (!rec) return;
         if (stateInput && !stateInput.value) {
-          // Auto-pick matching option
-          for (const opt of stateInput.options) {
-            if (opt.value === rec.state || opt.text === rec.state) {
-              opt.selected = true;
-              break;
+          if (stateInput.options) {
+            // Auto-pick matching option
+            for (const opt of stateInput.options) {
+              if (opt.value === rec.state || opt.text === rec.state) {
+                opt.selected = true;
+                break;
+              }
             }
+          } else {
+            stateInput.value = rec.state;
           }
         } else if (stateInput) {
-          for (const opt of stateInput.options) {
-            if (opt.value === rec.state || opt.text === rec.state) {
-              opt.selected = true;
-              break;
+          if (stateInput.options) {
+            for (const opt of stateInput.options) {
+              if (opt.value === rec.state || opt.text === rec.state) {
+                opt.selected = true;
+                break;
+              }
             }
+          } else {
+            stateInput.value = rec.state;
           }
         }
         // Populate pin datalist
@@ -1136,7 +1144,7 @@
         }
       }, true);
       // Also gate the "Continue to payment" / pay buttons (e.g. Stripe/PayPal/Wise stubs)
-      document.querySelectorAll("[data-pay-btn], [data-continue-payment]").forEach(function (btn) {
+      document.querySelectorAll("[data-pay-btn], [data-continue-payment], [data-checkout-form] [data-cr-next]").forEach(function (btn) {
         btn.addEventListener("click", function (e) {
           if (!hasAddress()) {
             e.preventDefault();
@@ -1300,6 +1308,8 @@
     var checkoutMessage = shell.querySelector("[data-checkout-message]");
     var paypalRendered = false;
     var paypalLoading = null;
+    var mobilePayPalMq = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
+    var paypalResizeTimer = null;
     function setStatus(t, err) {
       [statusEl, checkoutMessage].forEach(function (node) {
         if (!node) return;
@@ -1325,13 +1335,24 @@
         items: cart.map(function (c) { return { id: c.id, quantity: c.quantity }; })
       };
     }
+    function isMobileCheckout() {
+      return !!(mobilePayPalMq && mobilePayPalMq.matches);
+    }
+    function isVisible(node) {
+      return !!(node && node.offsetParent !== null && node.getClientRects().length);
+    }
+    function resetMobilePayPalButtons() {
+      if (!isMobileCheckout() || !paypalButton || !paypalRendered) return;
+      paypalButton.innerHTML = "";
+      paypalRendered = false;
+    }
     function togglePaymentUi() {
       var payVal = getPayVal();
       if (wise) wise.hidden = payVal !== "wise";
       var usePayPal = payVal === "paypal" && paypalReady;
       if (paypalWrap) paypalWrap.hidden = !usePayPal;
       if (submitButton) submitButton.hidden = usePayPal;
-      if (usePayPal) renderPayPalButtons();
+      if (usePayPal && (!isMobileCheckout() || isVisible(paypalWrap))) renderPayPalButtons();
     }
     function loadPayPalSdk() {
       if (window.paypal) return Promise.resolve();
@@ -1408,6 +1429,20 @@
     var form = shell.querySelector("[data-checkout-form]");
     if (!form) return;
     togglePaymentUi();
+    shell.querySelectorAll("[data-cr-next], [data-cr-back]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        setTimeout(togglePaymentUi, 0);
+      });
+    });
+    if (isMobileCheckout()) {
+      window.addEventListener("resize", function () {
+        clearTimeout(paypalResizeTimer);
+        paypalResizeTimer = setTimeout(function () {
+          resetMobilePayPalButtons();
+          togglePaymentUi();
+        }, 180);
+      });
+    }
     form.addEventListener("submit", function (e) {
       var payVal = getPayVal();
       if (payVal === "cod") return;

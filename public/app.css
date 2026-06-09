@@ -2331,6 +2331,8 @@ body[class*="theme-"] .cr-footer .cr-footer-social a:hover {
   .cr-co-grid-2, .cr-admin-grid-2 { grid-template-columns: 1fr; }
   .cr-co-stepper { font-size: 12px; }
   .cr-co-stepper li { padding: 10px; }
+  .cr-co-paypal-wrap,
+  .cr-co-paypal-wrap [data-paypal-button] { width: 100%; min-width: 0; }
   .cr-admin-kpis { grid-template-columns: 1fr; }
   .cr-admin-chart { height: 120px; }
   .v2-hero { height: 360px; }
