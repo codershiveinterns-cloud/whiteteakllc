@@ -3898,6 +3898,10 @@ function forgotPasswordPage({ message = "", error = "", email = "" } = {}, user 
 }
 
 function resetPasswordPage({ message = "", error = "", email = "", maskedPhone = "" } = {}, user = null) {
+  const hasDeliveryError = error || /couldn't|could not|unable|not configured/i.test(message);
+  const intro = hasDeliveryError
+    ? `We couldn't email an OTP to <strong>${escapeHtml(email)}</strong>. Please try resending the code.`
+    : `OTP sent to <strong>${escapeHtml(email)}</strong>. Valid for 10 minutes.`;
   const phoneLine = maskedPhone ? `<p class="eo-auth-sub" style="margin-top:4px;font-size:13px;color:#666">Registered mobile on file: <strong>${escapeHtml(maskedPhone)}</strong> (SMS delivery coming soon — use the email OTP for now).</p>` : "";
   return layout({
     title: "Reset password – WHITETEAKLLC",
@@ -3918,7 +3922,7 @@ function resetPasswordPage({ message = "", error = "", email = "", maskedPhone =
           <div class="eo-auth-right">
             <div class="eo-auth-card">
               <h1 class="eo-auth-title">Set a new password</h1>
-              <p class="eo-auth-sub">OTP sent to <strong>${escapeHtml(email)}</strong>. Valid for 10 minutes.</p>
+              <p class="eo-auth-sub">${intro}</p>
               ${phoneLine}
               ${message ? `<div class="eo-auth-banner">${escapeHtml(message)}</div>` : ""}
               ${error ? `<div class="eo-auth-banner eo-auth-error">${escapeHtml(error)}</div>` : ""}
@@ -3937,6 +3941,33 @@ function resetPasswordPage({ message = "", error = "", email = "", maskedPhone =
       </main>
     `
   });
+}
+
+function getOtpDeliveryMessage(mailResult, action = "sent") {
+  if (mailResult && mailResult.sent) {
+    return action === "resent"
+      ? "A new OTP has been sent. Please check your inbox and spam folder."
+      : "OTP sent. Please check your inbox and spam folder.";
+  }
+  const error = mailResult && mailResult.error;
+  const responseCode = error && typeof error === "object" ? error.responseCode : null;
+  const code = error && typeof error === "object" ? error.code : null;
+  if (responseCode === 535 || code === "EAUTH") {
+    return "We couldn't send the OTP email because the mail account rejected the SMTP login. Please try again shortly or contact support.";
+  }
+  if (mailResult && mailResult.mode === "dev") {
+    return "OTP email is not configured right now. Please contact support to reset your password.";
+  }
+  return "We couldn't send the OTP email. Please try again or contact support.";
+}
+
+function logOtpDeliveryFailure(scope, email, mailResult) {
+  if (mailResult && mailResult.sent) return;
+  const error = mailResult && mailResult.error;
+  const detail = error && typeof error === "object"
+    ? `${error.message || "SMTP delivery failed"}${error.code ? " [" + error.code + "]" : ""}${error.responseCode ? " responseCode=" + error.responseCode : ""}`
+    : (error || "SMTP delivery failed");
+  console.warn(`[${scope}] OTP email delivery failed for ${email}: ${detail}`);
 }
 
 function signupPage({ message = "", error = "", name = "", email = "" } = {}, user = null) {
@@ -5675,6 +5706,7 @@ async function handleRequest(req, res) {
     await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
     let mailResult = { sent: false, mode: "dev" };
     try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
+    logOtpDeliveryFailure("forgot", email, mailResult);
     console.log(`[forgot] reset OTP for ${email}: ${otp}`);
     let maskedPhone = "";
     try {
@@ -5684,9 +5716,7 @@ async function handleRequest(req, res) {
         maskedPhone = p.length >= 4 ? p.slice(0, 2) + "•".repeat(Math.max(0, p.length - 4)) + p.slice(-2) : p;
       }
     } catch { /* phone optional */ }
-    const mailMessage = !mailResult.sent
-      ? "We couldn't send the OTP email. Please try again or contact support."
-      : "OTP sent. Please check your inbox (and spam folder).";
+    const mailMessage = getOtpDeliveryMessage(mailResult, "sent");
     html(res, 200, resetPasswordPage({
       email,
       message: mailMessage,
@@ -5709,10 +5739,9 @@ async function handleRequest(req, res) {
     await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
     let mailResult = { sent: false, mode: "dev" };
     try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot-resend] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
+    logOtpDeliveryFailure("forgot-resend", email, mailResult);
     console.log(`[forgot-resend] reset OTP for ${email}: ${otp}`);
-    const mailMessage = !mailResult.sent
-      ? "We couldn't send the OTP email. Please try again or contact support."
-      : "A new OTP has been sent.";
+    const mailMessage = getOtpDeliveryMessage(mailResult, "resent");
     html(res, 200, resetPasswordPage({ email, message: mailMessage }, currentUser));
     return;
   }

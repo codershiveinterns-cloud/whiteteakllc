@@ -28,10 +28,26 @@ function getMailerConfig() {
   };
 }
 
+function formatMailerError(error) {
+  if (!error) return null;
+  return {
+    message: error.message || "SMTP delivery failed",
+    code: error.code || null,
+    command: error.command || null,
+    responseCode: error.responseCode || null
+  };
+}
+
 async function sendOtpEmail(email, otp, verifyLink = "") {
   const config = getMailerConfig();
   if (!config) {
-    return { sent: false, mode: "dev", otp, verifyLink };
+    return {
+      sent: false,
+      mode: "dev",
+      otp,
+      verifyLink,
+      error: !nodemailer ? "nodemailer is not installed" : "SMTP_HOST, SMTP_USER, or SMTP_PASS is missing"
+    };
   }
 
   // Namecheap shared hosting issues one wildcard TLS cert (*.web-hosting.com)
@@ -45,6 +61,9 @@ async function sendOtpEmail(email, otp, verifyLink = "") {
     port: config.port,
     secure: config.secure,
     auth: config.auth,
+    connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS) || 15000,
+    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT_MS) || 15000,
+    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS) || 20000,
     tls: relaxTls ? { rejectUnauthorized: false } : undefined
   });
 
@@ -57,7 +76,8 @@ async function sendOtpEmail(email, otp, verifyLink = "") {
        <p style="font-size:12px;color:#666">If the button doesn't work, paste this URL into your browser:<br><a href="${verifyLink}">${verifyLink}</a></p>`
     : "";
 
-  await transporter.sendMail({
+  try {
+    await transporter.sendMail({
     from: config.from,
     replyTo: config.replyTo,
     to: email,
@@ -76,7 +96,10 @@ async function sendOtpEmail(email, otp, verifyLink = "") {
              <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
              <p style="font-size:12px;color:#888">If you didn't request this, you can safely ignore this email. For account help, reply to this email or contact <a href="mailto:admin@whiteteakllc.com">admin@whiteteakllc.com</a>.</p>
            </div>`
-  });
+    });
+  } catch (error) {
+    return { sent: false, mode: "smtp", error: formatMailerError(error) };
+  }
 
   return { sent: true, mode: "smtp" };
 }
