@@ -54,6 +54,14 @@ class SqliteStore {
     this.ensureDefaultAdmin();
   }
 
+  saveDbSafe(scope = "data-layer") {
+    try {
+      if (this.db && typeof this.db.save === "function") this.db.save();
+    } catch (error) {
+      console.warn(`[${scope}] db save failed:`, error.message);
+    }
+  }
+
   ensureDefaultAdmin() {
     const email = "admin@whiteteakllc.com";
     const existing = this.db.prepare("SELECT id FROM users WHERE email = ?").get(email);
@@ -63,6 +71,7 @@ class SqliteStore {
     this.db.prepare(
       "INSERT INTO users (name, email, password_hash, verified, created_at) VALUES (?, ?, ?, 1, ?)"
     ).run("WhiteTeak Admin", email, passwordHash, now);
+    this.saveDbSafe("default-admin");
   }
 
   async getUserByEmail(email) {
@@ -75,16 +84,19 @@ class SqliteStore {
     this.db.prepare(
       "INSERT INTO users (name, email, password_hash, verified, created_at) VALUES (?, ?, ?, 0, ?)"
     ).run(name, email.toLowerCase(), passwordHash, now);
+    this.saveDbSafe("create-user");
     return this.getUserByEmail(email);
   }
 
   async markUserVerified(email) {
     this.db.prepare("UPDATE users SET verified = 1 WHERE email = ?").run(email.toLowerCase());
+    this.saveDbSafe("verify-user");
   }
 
   async updateUserPassword(email, newPassword) {
     const passwordHash = hashPassword(newPassword);
     this.db.prepare("UPDATE users SET password_hash = ? WHERE email = ?").run(passwordHash, email.toLowerCase());
+    this.saveDbSafe("update-password");
     return passwordHash;
   }
 
@@ -95,6 +107,7 @@ class SqliteStore {
     this.db.prepare(
       "INSERT INTO otp_codes (email, code_hash, purpose, expires_at, consumed, created_at) VALUES (?, ?, ?, ?, 0, ?)"
     ).run(email.toLowerCase(), codeHash, purpose, expiresAt, now);
+    this.saveDbSafe("save-otp");
   }
 
   async verifyOtp({ email, code, purpose }) {
@@ -106,6 +119,7 @@ class SqliteStore {
     const ok = verifyPassword(code, row.code_hash);
     if (!ok) return false;
     this.db.prepare("UPDATE otp_codes SET consumed = 1 WHERE id = ?").run(row.id);
+    this.saveDbSafe("consume-otp");
     return true;
   }
 
@@ -116,6 +130,7 @@ class SqliteStore {
     this.db.prepare(
       "INSERT INTO sessions (session_token, user_email, expires_at, created_at) VALUES (?, ?, ?, ?)"
     ).run(token, email.toLowerCase(), expiresAt, now);
+    this.saveDbSafe("create-session");
     return { token, expiresAt };
   }
 
@@ -129,6 +144,7 @@ class SqliteStore {
 
   async deleteSession(token) {
     this.db.prepare("DELETE FROM sessions WHERE session_token = ?").run(token);
+    this.saveDbSafe("delete-session");
   }
 }
 

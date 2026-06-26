@@ -125,6 +125,63 @@ async function mirrorPasswordReset(email) {
   });
 }
 
+async function mirrorSupportToken(entry) {
+  if (!entry || !entry.token) return { mirrored: false };
+  return safeWrite("support_tokens", entry.token, entry);
+}
+
+async function mirrorEmailEvent(event) {
+  if (!event) return { mirrored: false };
+  return safeWrite("email_events", null, event);
+}
+
+async function listCollection(collection, { limit = 250, orderBy = "created_at" } = {}) {
+  if (!isEnabled()) return [];
+  try {
+    let ref = firestore.collection(collection);
+    if (orderBy) ref = ref.orderBy(orderBy, "desc");
+    const snap = await ref.limit(Math.max(1, Math.min(Number(limit) || 250, 1000))).get();
+    return snap.docs.map((doc) => ({ id: doc.id, ...doc.data(), _source: "Firestore" }));
+  } catch (e) {
+    try {
+      const snap = await firestore.collection(collection).limit(Math.max(1, Math.min(Number(limit) || 250, 1000))).get();
+      return snap.docs.map((doc) => ({ id: doc.id, ...doc.data(), _source: "Firestore" }));
+    } catch (err) {
+      console.warn(`[firebase] list ${collection} failed:`, err.message);
+      return [];
+    }
+  }
+}
+
+async function listOrders(opts = {}) {
+  return listCollection("orders", { ...opts, orderBy: "created_at" });
+}
+
+async function listContactMessages(opts = {}) {
+  return listCollection("contact_messages", { ...opts, orderBy: "created_at" });
+}
+
+async function listNewsletterSubscribers(opts = {}) {
+  return listCollection("newsletter_subscribers", { ...opts, orderBy: "created_at" });
+}
+
+async function listOtpLogs(opts = {}) {
+  return listCollection("otp_log", { ...opts, orderBy: "created_at" });
+}
+
+async function listEmailEvents(opts = {}) {
+  return listCollection("email_events", { ...opts, orderBy: "created_at" });
+}
+
+async function listSupportTokens(opts = {}) {
+  return listCollection("support_tokens", { ...opts, orderBy: "created_at" });
+}
+
+async function updateOrderStatus(orderCode, status) {
+  if (!orderCode) return { mirrored: false };
+  return safeWrite("orders", orderCode, { order_code: orderCode, status });
+}
+
 module.exports = {
   init,
   isEnabled,
@@ -134,5 +191,14 @@ module.exports = {
   mirrorNewsletterSubscriber,
   mirrorOtpLog,
   mirrorPasswordReset,
+  mirrorSupportToken,
+  mirrorEmailEvent,
+  listOrders,
+  listContactMessages,
+  listNewsletterSubscribers,
+  listOtpLogs,
+  listEmailEvents,
+  listSupportTokens,
+  updateOrderStatus,
   safeWrite
 };

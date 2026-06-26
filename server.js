@@ -22,7 +22,16 @@ const COUNTRIES = [
   "Afghanistan","Albania","Algeria","Andorra","Angola","Argentina","Armenia","Australia","Austria","Azerbaijan","Bahamas","Bahrain","Bangladesh","Barbados","Belarus","Belgium","Belize","Benin","Bhutan","Bolivia","Bosnia and Herzegovina","Botswana","Brazil","Brunei","Bulgaria","Burkina Faso","Burundi","Cambodia","Cameroon","Canada","Cape Verde","Central African Republic","Chad","Chile","China","Colombia","Comoros","Costa Rica","Croatia","Cuba","Cyprus","Czechia","Denmark","Djibouti","Dominica","Dominican Republic","Ecuador","Egypt","El Salvador","Estonia","Eswatini","Ethiopia","Fiji","Finland","France","Gabon","Gambia","Georgia","Germany","Ghana","Greece","Grenada","Guatemala","Guinea","Guyana","Haiti","Honduras","Hong Kong","Hungary","Iceland","India","Indonesia","Iraq","Ireland","Israel","Italy","Jamaica","Japan","Jordan","Kazakhstan","Kenya","Kuwait","Kyrgyzstan","Laos","Latvia","Lebanon","Lesotho","Liberia","Libya","Liechtenstein","Lithuania","Luxembourg","Macao","Madagascar","Malawi","Malaysia","Maldives","Mali","Malta","Mauritania","Mauritius","Mexico","Moldova","Monaco","Mongolia","Montenegro","Morocco","Mozambique","Myanmar","Namibia","Nepal","Netherlands","New Zealand","Nicaragua","Niger","Nigeria","North Macedonia","Norway","Oman","Pakistan","Panama","Papua New Guinea","Paraguay","Peru","Philippines","Poland","Portugal","Qatar","Romania","Russia","Rwanda","San Marino","Saudi Arabia","Senegal","Serbia","Seychelles","Sierra Leone","Singapore","Slovakia","Slovenia","Somalia","South Africa","South Korea","Spain","Sri Lanka","Sudan","Suriname","Sweden","Switzerland","Taiwan","Tajikistan","Tanzania","Thailand","Togo","Trinidad and Tobago","Tunisia","Turkey","Turkmenistan","Uganda","Ukraine","United Arab Emirates","United Kingdom","United States","Uruguay","Uzbekistan","Venezuela","Vietnam","Yemen","Zambia","Zimbabwe"
 ];
 let fbMirror = null; try { fbMirror = require("./firebase-mirror"); fbMirror.init(); } catch (_) { fbMirror = null; }
-const { sendOtpEmail } = require("./mailer");
+const {
+  sendEmail,
+  sendOtpEmail,
+  sendOrderAdminEmail,
+  sendOrderCustomerEmail,
+  sendContactNotificationEmail,
+  sendNewsletterNotificationEmail,
+  sendSupportTokenEmail,
+  getAdminNotifyEmail
+} = require("./mailer");
 
 let productsV2 = [];
 try { productsV2 = require("./data/products-v2.json"); } catch { productsV2 = []; }
@@ -136,6 +145,16 @@ db.exec(`
     email TEXT NOT NULL,
     code TEXT NOT NULL,
     verified INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS email_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    related_ref TEXT,
     created_at TEXT NOT NULL
   );
 `);
@@ -938,9 +957,76 @@ function createOrderCode() {
   return `ORD-${1000 + Number(db.prepare("SELECT COUNT(*) AS count FROM orders").get().count) + 1}`;
 }
 
+function saveDbSafe(scope = "db") {
+  try {
+    if (db && typeof db.save === "function") db.save();
+  } catch (error) {
+    console.warn(`[${scope}] db save failed:`, error.message);
+  }
+}
+
+function generateOtp() {
+  return String(crypto.randomInt(100000, 1000000));
+}
+
+function getAdminNotificationEmail() {
+  return process.env.ADMIN_NOTIFY_EMAIL || process.env.ADMIN_NOTIFICATION_EMAIL || getAdminNotifyEmail() || process.env.SMTP_REPLY_TO || process.env.SMTP_USER || "admin@whiteteakllc.com";
+}
+
+function emailEventError(error) {
+  if (!error) return "";
+  if (typeof error === "string") return error;
+  return [error.message, error.code, error.responseCode ? `responseCode=${error.responseCode}` : ""].filter(Boolean).join(" ") || JSON.stringify(error);
+}
+
+async function recordEmailEvent({ kind, recipient, subject, result, relatedRef = "" }) {
+  const status = result && result.sent ? "sent" : (result && result.mode) || "error";
+  const error = result && !result.sent ? emailEventError(result.error) : "";
+  const createdAt = new Date().toISOString();
+  const entry = {
+    kind: String(kind || "email"),
+    recipient: String(recipient || ""),
+    subject: String(subject || ""),
+    status,
+    error,
+    related_ref: String(relatedRef || ""),
+    created_at: createdAt
+  };
+  try {
+    db.prepare("INSERT INTO email_events (kind, recipient, subject, status, error, related_ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(entry.kind, entry.recipient, entry.subject, entry.status, entry.error, entry.related_ref, entry.created_at);
+    saveDbSafe("email-events");
+  } catch (e) {
+    console.warn("[email-events] insert failed:", e.message);
+  }
+  if (fbMirror) { try { await fbMirror.mirrorEmailEvent(entry); } catch (_) {} }
+  return entry;
+}
+
+async function sendTrackedEmail(kind, recipient, subject, relatedRef, sender) {
+  let result = { sent: false, mode: "error", error: "Email sender did not run" };
+  try {
+    result = await sender();
+  } catch (error) {
+    result = { sent: false, mode: "error", error: error.message || "Email delivery failed" };
+  }
+  await recordEmailEvent({ kind, recipient, subject, result, relatedRef });
+  return result;
+}
+
+async function sendOrderNotifications(order, items) {
+  const adminSubject = `New order ${order.order_code || ""} - WhiteTeak LLC`;
+  const adminResult = await sendTrackedEmail("order_admin", getAdminNotificationEmail(), adminSubject, order.order_code, () => sendOrderAdminEmail(order, items));
+  if (!adminResult.sent) console.warn("[order-email] admin notification failed:", emailEventError(adminResult.error));
+  const customerSubject = `Your WhiteTeak LLC order ${order.order_code || ""}`;
+  const customerResult = await sendTrackedEmail("order_customer", order.email, customerSubject, order.order_code, () => sendOrderCustomerEmail(order, items));
+  if (!customerResult.sent) console.warn("[order-email] customer notification failed:", emailEventError(customerResult.error));
+}
+
 async function persistOrder(o, items, status, paymentMethod = "COD", paymentMeta = {}) {
   const orderCode = createOrderCode();
   const total = computeOrderTotal(items);
+  const createdAt = new Date().toISOString();
   db.prepare(`
     INSERT INTO orders
     (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at, payment_method, paypal_order_id, paypal_capture_id)
@@ -957,18 +1043,34 @@ async function persistOrder(o, items, status, paymentMethod = "COD", paymentMeta
     status,
     total,
     JSON.stringify(items),
-    new Date().toISOString(),
+    createdAt,
     paymentMethod,
     paymentMeta.paypalOrderId || null,
     paymentMeta.paypalCaptureId || null
   );
   const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
   for (const item of items) reduceStock.run(item.quantity, item.id);
-  if (fbMirror) {
-    const mirrored = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode);
-    if (mirrored) { try { await fbMirror.mirrorOrder(mirrored); } catch (_) {} }
-  }
-  return { orderCode, total };
+  saveDbSafe("orders");
+  const order = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode) || {
+    order_code: orderCode,
+    customer_name: o.customerName,
+    email: String(o.email).toLowerCase(),
+    phone: o.phone,
+    address: o.address,
+    city: o.city,
+    state: o.state,
+    pincode: o.pincode,
+    status,
+    total,
+    items_json: JSON.stringify(items),
+    created_at: createdAt,
+    payment_method: paymentMethod,
+    paypal_order_id: paymentMeta.paypalOrderId || null,
+    paypal_capture_id: paymentMeta.paypalCaptureId || null
+  };
+  if (fbMirror) { try { await fbMirror.mirrorOrder(order); } catch (_) {} }
+  try { await sendOrderNotifications(order, items); } catch (error) { console.warn("[order-email] notification failed:", error.message); }
+  return { orderCode, total, order, items };
 }
 
 function currency(value) {
@@ -4200,38 +4302,93 @@ const ORDER_STATUS_OPTIONS = [
   "Cancelled"
 ];
 
+function sourceTag(row) {
+  return row && row._source ? `<span class="cr-admin-status" style="font-size:11px">${escapeHtml(row._source)}</span>` : "";
+}
+
+function parseItems(itemsJson) {
+  try { return JSON.parse(itemsJson || "[]"); } catch { return []; }
+}
+
+function mergeByKey(primary, secondary, keyFn) {
+  const map = new Map();
+  for (const row of [...primary, ...secondary]) {
+    const key = keyFn(row);
+    if (!key) continue;
+    if (!map.has(key)) map.set(key, row);
+    else map.set(key, { ...row, ...map.get(key) });
+  }
+  return Array.from(map.values()).sort((a, b) => new Date(b.created_at || b._mirroredAt || 0) - new Date(a.created_at || a._mirroredAt || 0));
+}
+
+async function getAdminData({ q = "" } = {}) {
+  const localOrders = db.prepare("SELECT * FROM orders ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" }));
+  const localContacts = (() => { try { return db.prepare("SELECT * FROM contact_messages ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
+  const localNewsletter = (() => { try { return db.prepare("SELECT * FROM newsletter_subscribers ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
+  const localSupportTokens = (() => { try { return db.prepare("SELECT * FROM support_tokens ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
+  const localOtpLogs = (() => { try { return db.prepare("SELECT email, purpose, expires_at, consumed, created_at FROM otp_codes ORDER BY id DESC LIMIT 250").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
+  const localEmailEvents = (() => { try { return db.prepare("SELECT * FROM email_events ORDER BY id DESC LIMIT 250").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
+
+  const [fbOrders, fbContacts, fbNewsletter, fbOtpLogs, fbEmailEvents, fbSupportTokens] = fbMirror ? await Promise.all([
+    fbMirror.listOrders ? fbMirror.listOrders({ limit: 250 }) : [],
+    fbMirror.listContactMessages ? fbMirror.listContactMessages({ limit: 250 }) : [],
+    fbMirror.listNewsletterSubscribers ? fbMirror.listNewsletterSubscribers({ limit: 250 }) : [],
+    fbMirror.listOtpLogs ? fbMirror.listOtpLogs({ limit: 250 }) : [],
+    fbMirror.listEmailEvents ? fbMirror.listEmailEvents({ limit: 250 }) : [],
+    fbMirror.listSupportTokens ? fbMirror.listSupportTokens({ limit: 250 }) : []
+  ]) : [[], [], [], [], [], []];
+
+  const orders = mergeByKey(localOrders, fbOrders, (row) => row.order_code);
+  const contacts = mergeByKey(localContacts, fbContacts, (row) => `${row.created_at || row._mirroredAt || ""}:${String(row.email || "").toLowerCase()}:${row.subject || ""}`);
+  const newsletter = mergeByKey(localNewsletter, fbNewsletter, (row) => String(row.email || "").toLowerCase());
+  const supportTokens = mergeByKey(localSupportTokens, fbSupportTokens, (row) => row.token || `${row.created_at}:${row.email}`);
+  const otpLogs = mergeByKey(localOtpLogs, fbOtpLogs, (row) => `${row.created_at || row._mirroredAt || ""}:${String(row.email || "").toLowerCase()}:${row.purpose || ""}`);
+  const emailEvents = mergeByKey(localEmailEvents, fbEmailEvents, (row) => `${row.created_at || row._mirroredAt || ""}:${row.recipient || ""}:${row.subject || ""}`);
+  const customersMap = new Map();
+  for (const order of orders) {
+    const email = String(order.email || "").toLowerCase();
+    if (!email) continue;
+    const existing = customersMap.get(email) || { email, customer_name: order.customer_name || email, orders: 0, phone: order.phone || "" };
+    existing.orders += 1;
+    if (!existing.phone && order.phone) existing.phone = order.phone;
+    customersMap.set(email, existing);
+  }
+  const search = String(q || "").trim().toLowerCase();
+  const searchResults = search ? {
+    orders: orders.filter((o) => [o.order_code, o.customer_name, o.email, o.phone, o.total].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25),
+    products: db.prepare("SELECT * FROM products WHERE name LIKE ? OR brand LIKE ? OR price LIKE ? ORDER BY id DESC LIMIT 25").all(`%${q}%`, `%${q}%`, `%${q}%`).map(normalizeProduct),
+    contacts: contacts.filter((c) => [c.name, c.email, c.phone, c.subject, c.message].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25)
+  } : null;
+  return { orders, contacts, newsletter, supportTokens, otpLogs, emailEvents, customers: Array.from(customersMap.values()), searchResults };
+}
+
 function adminPage(user = null, opts = {}) {
   const section = opts.section || "dashboard";
   const q = (opts.q || "").trim();
+  const adminData = opts.adminData || { orders: [], contacts: [], newsletter: [], supportTokens: [], otpLogs: [], emailEvents: [], customers: [], searchResults: null };
+  const mergedOrders = adminData.orders || [];
   const stats = {
     products: db.prepare("SELECT COUNT(*) AS count FROM products").get().count,
     categories: db.prepare("SELECT COUNT(DISTINCT category) AS count FROM products").get().count,
-    orders: db.prepare("SELECT COUNT(*) AS count FROM orders").get().count,
-    revenue: db.prepare("SELECT COALESCE(SUM(total), 0) AS total FROM orders").get().total,
-    customers: db.prepare("SELECT COUNT(DISTINCT email) AS count FROM orders").get().count
+    orders: mergedOrders.length || db.prepare("SELECT COUNT(*) AS count FROM orders").get().count,
+    revenue: mergedOrders.length ? mergedOrders.reduce((sum, order) => sum + Number(order.total || 0), 0) : db.prepare("SELECT COALESCE(SUM(total), 0) AS total FROM orders").get().total,
+    customers: (adminData.customers || []).length || db.prepare("SELECT COUNT(DISTINCT email) AS count FROM orders").get().count
   };
   const userCount = (() => {
     try { return db.prepare("SELECT COUNT(*) AS count FROM users").get().count; } catch { return 0; }
   })();
-  const latestOrders = db.prepare("SELECT * FROM orders ORDER BY id DESC LIMIT 10").all();
+  const latestOrders = mergedOrders.slice(0, 10);
   const editSlug = user && user.__editSlug ? user.__editSlug : "";
   const editProduct = editSlug ? normalizeProduct(db.prepare("SELECT * FROM products WHERE slug = ?").get(editSlug)) : null;
   const allProducts = db.prepare("SELECT * FROM products ORDER BY id DESC").all().map(normalizeProduct);
-  const allOrders = db.prepare("SELECT * FROM orders ORDER BY id DESC").all();
-  const allCustomers = db.prepare("SELECT DISTINCT email, customer_name FROM orders ORDER BY customer_name").all();
+  const allOrders = mergedOrders;
+  const allCustomers = adminData.customers || [];
   let allUsers = [];
   try {
     allUsers = db.prepare("SELECT id, name, email, password_hash, verified FROM users ORDER BY id DESC").all();
   } catch { allUsers = []; }
 
-  let searchResults = null;
-  if (q) {
-    const like = `%${q}%`;
-    searchResults = {
-      orders: db.prepare("SELECT * FROM orders WHERE order_code LIKE ? OR customer_name LIKE ? OR total LIKE ? ORDER BY id DESC LIMIT 25").all(like, like, like),
-      products: db.prepare("SELECT * FROM products WHERE name LIKE ? OR brand LIKE ? OR price LIKE ? ORDER BY id DESC LIMIT 25").all(like, like, like).map(normalizeProduct)
-    };
-  }
+  const searchResults = adminData.searchResults;
 
   const statusOptions = (current) => ORDER_STATUS_OPTIONS.map(s =>
     `<option value="${escapeHtml(s)}" ${s === current ? "selected" : ""}>${escapeHtml(s)}</option>`
@@ -4325,15 +4482,20 @@ function adminPage(user = null, opts = {}) {
       <div class="cr-admin-card-head"><h3>All Orders (${stats.orders})</h3></div>
       <div style="overflow-x:auto">
       <table class="cr-admin-table eo-admin-orders-table">
-        <thead><tr><th>Ref</th><th>Customer</th><th>Phone</th><th>Date</th><th>Shipping Address</th><th>Total</th><th>Status</th></tr></thead>
+        <thead><tr><th>Ref</th><th>Customer</th><th>Email / Phone</th><th>Date</th><th>Items</th><th>Shipping Address</th><th>Payment</th><th>Total</th><th>Status</th><th>Source</th></tr></thead>
         <tbody>
-          ${allOrders.length ? allOrders.map(order => `
+          ${allOrders.length ? allOrders.map(order => {
+            const items = parseItems(order.items_json);
+            const itemSummary = items.slice(0, 3).map((item) => `${item.quantity || 1} x ${item.name || "Item"}`).join("; ") + (items.length > 3 ? ` +${items.length - 3} more` : "");
+            return `
             <tr>
               <td>${escapeHtml(order.order_code)}</td>
               <td>${escapeHtml(order.customer_name)}</td>
-              <td>${order.phone ? `<a href="tel:${escapeHtml(order.phone)}">${escapeHtml(order.phone)}</a>` : "—"}</td>
-              <td>${new Date(order.created_at).toLocaleDateString("en-IN")}</td>
-              <td>${escapeHtml(order.address)}, ${escapeHtml(order.city)}, ${escapeHtml(order.state)} ${escapeHtml(order.pincode)}</td>
+              <td>${escapeHtml(order.email || "")}<br>${order.phone ? `<a href="tel:${escapeHtml(order.phone)}">${escapeHtml(order.phone)}</a>` : "—"}</td>
+              <td>${new Date(order.created_at || order._mirroredAt || Date.now()).toLocaleDateString("en-IN")}</td>
+              <td>${escapeHtml(itemSummary || "—")}</td>
+              <td>${escapeHtml(order.address || "")}, ${escapeHtml(order.city || "")}, ${escapeHtml(order.state || "")} ${escapeHtml(order.pincode || "")}</td>
+              <td>${escapeHtml(order.payment_method || "COD")}</td>
               <td>${currency(order.total)}</td>
               <td>
                 <form method="POST" action="/admin/orders/status" class="eo-status-form" data-eo-status-form>
@@ -4344,8 +4506,9 @@ function adminPage(user = null, opts = {}) {
                   <noscript><button type="submit">Update</button></noscript>
                 </form>
               </td>
-            </tr>
-          `).join("") : `<tr><td colspan="7">No orders yet.</td></tr>`}
+              <td>${sourceTag(order)}</td>
+            </tr>`;
+          }).join("") : `<tr><td colspan="10">No orders yet.</td></tr>`}
         </tbody>
       </table>
       </div>
@@ -4356,12 +4519,9 @@ function adminPage(user = null, opts = {}) {
     <section class="cr-admin-card" id="customers">
       <div class="cr-admin-card-head"><h3>Customers (${stats.customers})</h3></div>
       <table class="cr-admin-table">
-        <thead><tr><th>Name</th><th>Email</th><th>Orders</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Orders</th></tr></thead>
         <tbody>
-          ${allCustomers.length ? allCustomers.map(c => {
-            const count = db.prepare("SELECT COUNT(*) AS c FROM orders WHERE email = ?").get(c.email).c;
-            return `<tr><td>${escapeHtml(c.customer_name)}</td><td>${escapeHtml(c.email)}</td><td>${count}</td></tr>`;
-          }).join("") : `<tr><td colspan="3">No customers yet.</td></tr>`}
+          ${allCustomers.length ? allCustomers.map(c => `<tr><td>${escapeHtml(c.customer_name || c.email)}</td><td>${escapeHtml(c.email)}</td><td>${c.phone ? `<a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>` : "—"}</td><td>${c.orders || 0}</td></tr>`).join("") : `<tr><td colspan="4">No customers yet.</td></tr>`}
         </tbody>
       </table>
     </section>
@@ -4431,6 +4591,61 @@ function adminPage(user = null, opts = {}) {
     </section>
   `;
 
+  const contactMessagesSection = `
+    <section class="cr-admin-card" id="contact-messages">
+      <div class="cr-admin-card-head"><h3>Contact Messages (${(adminData.contacts || []).length})</h3></div>
+      <div style="overflow-x:auto"><table class="cr-admin-table">
+        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Subject</th><th>Message</th><th>Date</th><th>Source</th></tr></thead>
+        <tbody>${(adminData.contacts || []).length ? adminData.contacts.map((m) => `<tr><td>${escapeHtml(m.name || "")}</td><td>${escapeHtml(m.email || "")}</td><td>${escapeHtml(m.phone || "")}</td><td>${escapeHtml(m.subject || "")}</td><td style="max-width:360px;white-space:pre-wrap">${escapeHtml(String(m.message || "").slice(0, 500))}</td><td>${new Date(m.created_at || m._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(m)}</td></tr>`).join("") : `<tr><td colspan="7">No contact messages yet.</td></tr>`}</tbody>
+      </table></div>
+    </section>
+  `;
+
+  const newsletterSection = `
+    <section class="cr-admin-card" id="newsletter">
+      <div class="cr-admin-card-head"><h3>Newsletter Subscribers (${(adminData.newsletter || []).length})</h3></div>
+      <table class="cr-admin-table">
+        <thead><tr><th>Email</th><th>Signed up</th><th>Source</th></tr></thead>
+        <tbody>${(adminData.newsletter || []).length ? adminData.newsletter.map((n) => `<tr><td>${escapeHtml(n.email || "")}</td><td>${new Date(n.created_at || n._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(n)}</td></tr>`).join("") : `<tr><td colspan="3">No newsletter subscribers yet.</td></tr>`}</tbody>
+      </table>
+    </section>
+  `;
+
+  const supportTokensSection = `
+    <section class="cr-admin-card" id="support-tokens">
+      <div class="cr-admin-card-head"><h3>Support Tokens (${(adminData.supportTokens || []).length})</h3></div>
+      <table class="cr-admin-table">
+        <thead><tr><th>Token</th><th>Email</th><th>Created</th><th>Source</th></tr></thead>
+        <tbody>${(adminData.supportTokens || []).length ? adminData.supportTokens.map((t) => `<tr><td><code>${escapeHtml(t.token || "")}</code></td><td>${escapeHtml(t.email || "")}</td><td>${new Date(t.created_at || t._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(t)}</td></tr>`).join("") : `<tr><td colspan="4">No support tokens yet.</td></tr>`}</tbody>
+      </table>
+    </section>
+  `;
+
+  const emailLogsSection = `
+    <section class="cr-admin-card" id="email-logs">
+      <div class="cr-admin-card-head"><h3>Email Events (${(adminData.emailEvents || []).length})</h3><a href="/admin/smtp-test" target="_blank">SMTP test</a></div>
+      <div style="overflow-x:auto"><table class="cr-admin-table">
+        <thead><tr><th>Kind</th><th>Recipient</th><th>Subject</th><th>Status</th><th>Error</th><th>Ref</th><th>Date</th><th>Source</th></tr></thead>
+        <tbody>${(adminData.emailEvents || []).length ? adminData.emailEvents.map((e) => `<tr><td>${escapeHtml(e.kind || "")}</td><td>${escapeHtml(e.recipient || "")}</td><td>${escapeHtml(e.subject || "")}</td><td>${escapeHtml(e.status || "")}</td><td style="max-width:280px">${escapeHtml(e.error || "")}</td><td>${escapeHtml(e.related_ref || "")}</td><td>${new Date(e.created_at || e._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(e)}</td></tr>`).join("") : `<tr><td colspan="8">No email events yet.</td></tr>`}</tbody>
+      </table></div>
+      <h4 style="margin:18px 0 8px">OTP Logs (${(adminData.otpLogs || []).length})</h4>
+      <table class="cr-admin-table">
+        <thead><tr><th>Email</th><th>Purpose</th><th>Expires</th><th>Consumed</th><th>Created</th><th>Source</th></tr></thead>
+        <tbody>${(adminData.otpLogs || []).length ? adminData.otpLogs.map((o) => `<tr><td>${escapeHtml(o.email || "")}</td><td>${escapeHtml(o.purpose || "")}</td><td>${escapeHtml(o.expires_at || "")}</td><td>${o.consumed ? "Yes" : "No"}</td><td>${new Date(o.created_at || o._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(o)}</td></tr>`).join("") : `<tr><td colspan="6">No OTP metadata yet.</td></tr>`}</tbody>
+      </table>
+    </section>
+  `;
+
+  const diagnosticsSection = `
+    <section class="cr-admin-card" id="diagnostics">
+      <div class="cr-admin-card-head"><h3>Diagnostics</h3></div>
+      <p class="subtle">Use these checks when OTPs or admin notification emails do not arrive.</p>
+      <p><a class="cr-admin-primary" href="/admin/env-check" target="_blank">Open environment check</a> <a class="cr-admin-ghost" href="/admin/smtp-test" target="_blank">Open SMTP test</a></p>
+      <p>Admin notification recipient: <strong>${escapeHtml(getAdminNotificationEmail())}</strong></p>
+      <p>Firestore mirror: <strong>${fbMirror && fbMirror.isEnabled && fbMirror.isEnabled() ? "Enabled" : "Disabled"}</strong></p>
+    </section>
+  `;
+
   const dashboardSection = `
     <section class="cr-admin-kpis" id="dashboard">
       <article class="cr-admin-kpi">
@@ -4485,6 +4700,11 @@ function adminPage(user = null, opts = {}) {
           <thead><tr><th>Name</th><th>Brand</th><th>Price</th><th>Stock</th></tr></thead>
           <tbody>${searchResults.products.map(p => `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.brand)}</td><td>${currency(p.price)}</td><td>${p.stock}</td></tr>`).join("") || `<tr><td colspan="4">No matching products.</td></tr>`}</tbody>
         </table>
+        <h4 style="margin:18px 0 6px">Contact Messages (${(searchResults.contacts || []).length})</h4>
+        <table class="cr-admin-table">
+          <thead><tr><th>Name</th><th>Email</th><th>Subject</th><th>Message</th></tr></thead>
+          <tbody>${(searchResults.contacts || []).map(c => `<tr><td>${escapeHtml(c.name || "")}</td><td>${escapeHtml(c.email || "")}</td><td>${escapeHtml(c.subject || "")}</td><td>${escapeHtml(String(c.message || "").slice(0, 220))}</td></tr>`).join("") || `<tr><td colspan="4">No matching contact messages.</td></tr>`}</tbody>
+        </table>
       </section>
     `;
   } else if (section === "products") {
@@ -4495,6 +4715,16 @@ function adminPage(user = null, opts = {}) {
     mainBody = customersSection;
   } else if (section === "settings") {
     mainBody = settingsSection;
+  } else if (section === "contact-messages") {
+    mainBody = contactMessagesSection;
+  } else if (section === "newsletter") {
+    mainBody = newsletterSection;
+  } else if (section === "support-tokens") {
+    mainBody = supportTokensSection;
+  } else if (section === "email-logs") {
+    mainBody = emailLogsSection;
+  } else if (section === "diagnostics") {
+    mainBody = diagnosticsSection;
   } else if (section === "reviews") {
     let allReviews = [];
     try {
@@ -4555,6 +4785,11 @@ function adminPage(user = null, opts = {}) {
             ${navItem("/admin?section=orders", "Orders", "orders")}
             ${navItem("/admin?section=customers", "Customers", "customers")}
             ${navItem("/admin?section=reviews", "Reviews", "reviews")}
+            ${navItem("/admin?section=contact-messages", "Contact", "contact-messages")}
+            ${navItem("/admin?section=newsletter", "Newsletter", "newsletter")}
+            ${navItem("/admin?section=support-tokens", "Support Tokens", "support-tokens")}
+            ${navItem("/admin?section=email-logs", "Email / OTP Logs", "email-logs")}
+            ${navItem("/admin?section=diagnostics", "Diagnostics", "diagnostics")}
             ${navItem("/admin?section=settings", "Settings", "settings")}
           </nav>
         </aside>
@@ -5494,10 +5729,10 @@ async function handleRequest(req, res) {
       return;
     }
     const adminUser = { ...currentUser, __editSlug: url.searchParams.get("edit") || "" };
-    html(res, 200, adminPage(adminUser, {
-      section: url.searchParams.get("section") || "dashboard",
-      q: url.searchParams.get("q") || ""
-    }));
+    const section = url.searchParams.get("section") || "dashboard";
+    const q = url.searchParams.get("q") || "";
+    const adminData = await getAdminData({ section, q });
+    html(res, 200, adminPage(adminUser, { section, q, adminData }));
     return;
   }
 
@@ -5569,14 +5804,19 @@ async function handleRequest(req, res) {
       ADMIN_PASSWORD_set: Boolean(process.env.ADMIN_PASSWORD),
       AUTH_SECRET_set: Boolean(process.env.AUTH_SECRET),
       ADMIN_SYNTHETIC_EMAIL_set: Boolean(process.env.ADMIN_SYNTHETIC_EMAIL),
+      ADMIN_NOTIFICATION_EMAIL_set: Boolean(process.env.ADMIN_NOTIFICATION_EMAIL),
+      ADMIN_NOTIFY_EMAIL_set: Boolean(process.env.ADMIN_NOTIFY_EMAIL),
       SMTP_HOST_set: Boolean(process.env.SMTP_HOST),
       SMTP_PORT_set: Boolean(process.env.SMTP_PORT),
       SMTP_USER_set: Boolean(process.env.SMTP_USER),
       SMTP_PASS_set: Boolean(process.env.SMTP_PASS),
       SMTP_FROM_set: Boolean(process.env.SMTP_FROM),
       SMTP_REPLY_TO_set: Boolean(process.env.SMTP_REPLY_TO),
+      SMTP_TLS_STRICT: String(process.env.SMTP_TLS_STRICT || ""),
       FIREBASE_SERVICE_ACCOUNT_set: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT),
       FIREBASE_PROJECT_ID_set: Boolean(process.env.FIREBASE_PROJECT_ID),
+      firebase_mirror_enabled: Boolean(fbMirror && fbMirror.isEnabled && fbMirror.isEnabled()),
+      admin_notify_recipient: getAdminNotificationEmail(),
       nodemailer_installed: nodemailerOk,
       dotenv_file_present: fs.existsSync(path.join(ROOT, ".env")),
       IS_VERCEL,
@@ -5635,6 +5875,8 @@ async function handleRequest(req, res) {
     const status = String(body.status || "").trim();
     if (orderCode && ORDER_STATUS_OPTIONS.includes(status)) {
       db.prepare("UPDATE orders SET status = ? WHERE order_code = ?").run(status, orderCode);
+      saveDbSafe("order-status");
+      if (fbMirror && fbMirror.updateOrderStatus) { try { await fbMirror.updateOrderStatus(orderCode, status); } catch (_) {} }
     }
     res.writeHead(302, { Location: "/admin?section=orders" });
     res.end();
@@ -5651,6 +5893,7 @@ async function handleRequest(req, res) {
     if (slugs.length) {
       const placeholders = slugs.map(() => "?").join(",");
       db.prepare(`DELETE FROM products WHERE slug IN (${placeholders})`).run(...slugs);
+      saveDbSafe("products-bulk-delete");
     }
     res.writeHead(302, { Location: "/admin?section=products" });
     res.end();
@@ -5701,11 +5944,10 @@ async function handleRequest(req, res) {
       res.end();
       return;
     }
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = generateOtp();
     const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
     await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
-    let mailResult = { sent: false, mode: "dev" };
-    try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
+    const mailResult = await sendTrackedEmail("otp_reset", email, "Your WhiteTeak LLC verification code", email, () => sendOtpEmail(email, otp, { expiresInMinutes: 10 }));
     logOtpDeliveryFailure("forgot", email, mailResult);
     console.log(`[forgot] reset OTP for ${email}: ${otp}`);
     let maskedPhone = "";
@@ -5734,11 +5976,10 @@ async function handleRequest(req, res) {
       res.end();
       return;
     }
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = generateOtp();
     const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
     await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
-    let mailResult = { sent: false, mode: "dev" };
-    try { mailResult = await sendOtpEmail(email, otp, ""); } catch (e) { console.warn("[forgot-resend] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
+    const mailResult = await sendTrackedEmail("otp_reset_resend", email, "Your WhiteTeak LLC verification code", email, () => sendOtpEmail(email, otp, { expiresInMinutes: 10 }));
     logOtpDeliveryFailure("forgot-resend", email, mailResult);
     console.log(`[forgot-resend] reset OTP for ${email}: ${otp}`);
     const mailMessage = getOtpDeliveryMessage(mailResult, "resent");
@@ -5798,14 +6039,13 @@ async function handleRequest(req, res) {
       return;
     }
     await dataLayer.createUser({ name, email, password });
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
     await dataLayer.saveOtp({ email, code: otp, purpose: "register", expiresAt });
     const host = req.headers.host || "localhost:3000";
     const proto = req.headers["x-forwarded-proto"] || "http";
     const verifyLink = `${proto}://${host}/auth/verify?email=${encodeURIComponent(email)}&token=${otp}`;
-    let mailResult = { sent: false, mode: "dev" };
-    try { mailResult = await sendOtpEmail(email, otp, verifyLink); } catch (e) { console.warn("[signup] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
+    const mailResult = await sendTrackedEmail("otp_register", email, "Your WhiteTeak LLC verification code", email, () => sendOtpEmail(email, otp, { verifyLink, expiresInMinutes: 10 }));
     console.log(`[signup] OTP for ${email}: ${otp} — verify link: ${verifyLink}`);
     html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp, verifyLink }));
     return;
@@ -6114,13 +6354,14 @@ async function handleRequest(req, res) {
       }
     }
 
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otp = generateOtp();
     const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
     await dataLayer.saveOtp({ email, code: otp, purpose: mode, expiresAt });
-    const emailResult = await sendOtpEmail(email, otp);
+    const emailResult = await sendTrackedEmail(`otp_${mode}`, email, "Your WhiteTeak LLC verification code", email, () => sendOtpEmail(email, otp, { expiresInMinutes: 10 }));
+    logOtpDeliveryFailure(`auth-${mode}`, email, emailResult);
     const message = emailResult.sent
       ? `OTP sent to ${email}. Please check your inbox.`
-      : `OTP sent for ${mode}. Demo code: ${otp}`;
+      : getOtpDeliveryMessage(emailResult, "sent");
     res.writeHead(302, { Location: `/auth?message=${encodeURIComponent(message)}&email=${encodeURIComponent(email)}` });
     res.end();
     return;
@@ -6139,14 +6380,14 @@ async function handleRequest(req, res) {
       res.end();
       return;
     }
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
+    const otp = generateOtp();
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 10).toISOString();
     await dataLayer.saveOtp({ email, code: otp, purpose: "register", expiresAt });
     const host = req.headers.host || "localhost:3000";
     const proto = req.headers["x-forwarded-proto"] || "http";
     const verifyLink = `${proto}://${host}/auth/verify?email=${encodeURIComponent(email)}&token=${otp}`;
-    let mailResult = { sent: false, mode: "dev" };
-    try { mailResult = await sendOtpEmail(email, otp, verifyLink); } catch (e) { console.warn("[resend] mailer error:", e.message); mailResult = { sent: false, mode: "error" }; }
+    const mailResult = await sendTrackedEmail("otp_register_resend", email, "Your WhiteTeak LLC verification code", email, () => sendOtpEmail(email, otp, { verifyLink, expiresInMinutes: 10 }));
+    logOtpDeliveryFailure("resend", email, mailResult);
     console.log(`[resend] OTP for ${email}: ${otp}`);
     html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp, verifyLink }, { error: "" }));
     return;
@@ -6247,6 +6488,7 @@ async function handleRequest(req, res) {
         db.prepare(`INSERT INTO products (slug, name, brand, category, price, original_price, rating, reviews, stock, image, images_json, badge, description, specs_json, featured) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`)
           .run(slug, name, brand, category, price, originalPrice, rating, reviews, stock, savedImages[0] || "", JSON.stringify(savedImages), badge, description, JSON.stringify(specs));
       }
+      saveDbSafe("products-create");
       json(res, 200, { ok: true, slug });
       return;
     } catch (e) { json(res, 400, { error: e.message }); return; }
@@ -6299,6 +6541,7 @@ async function handleRequest(req, res) {
       );
     }
 
+    saveDbSafe("products-upsert");
     res.writeHead(302, { Location: "/admin" });
     res.end();
     return;
@@ -6314,6 +6557,7 @@ async function handleRequest(req, res) {
     const slug = String(body.slug || "").trim();
     if (slug) {
       db.prepare("DELETE FROM products WHERE slug = ?").run(slug);
+      saveDbSafe("products-delete");
     }
     res.writeHead(302, { Location: "/admin" });
     res.end();
@@ -6373,10 +6617,15 @@ async function handleRequest(req, res) {
       try { email = (JSON.parse(raw || "{}").email || "").trim().toLowerCase(); }
       catch { email = (parseFormEncoded(raw).email || "").trim().toLowerCase(); }
       if (!email || !email.includes("@")) { json(res, 400, { error: "Invalid email" }); return; }
+      const createdAt = new Date().toISOString();
       try {
-        db.prepare("INSERT INTO newsletter_subscribers (email, created_at) VALUES (?, ?)").run(email, new Date().toISOString());
+        db.prepare("INSERT INTO newsletter_subscribers (email, created_at) VALUES (?, ?)").run(email, createdAt);
+        saveDbSafe("newsletter");
       } catch (_e) { /* duplicate OK */ }
       if (fbMirror) { try { await fbMirror.mirrorNewsletterSubscriber(email); } catch (_) {} }
+      const subject = "New WhiteTeak LLC newsletter subscriber";
+      const result = await sendTrackedEmail("newsletter_admin", getAdminNotificationEmail(), subject, email, () => sendNewsletterNotificationEmail(email));
+      if (!result.sent) console.warn("[newsletter-email] notification failed:", emailEventError(result.error));
       json(res, 200, { ok: true });
       return;
     } catch (e) { json(res, 400, { error: e.message }); return; }
@@ -6389,21 +6638,21 @@ async function handleRequest(req, res) {
       const { name, email, phone = "", subject, message } = payload;
       if (!name || !email || !subject || !message) { json(res, 400, { error: "Missing fields" }); return; }
       const createdAt = new Date().toISOString();
+      const contactMessage = {
+        name: String(name),
+        email: String(email).toLowerCase(),
+        phone: String(phone),
+        subject: String(subject),
+        message: String(message),
+        created_at: createdAt
+      };
       db.prepare("INSERT INTO contact_messages (name, email, phone, subject, message, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(String(name), String(email).toLowerCase(), String(phone), String(subject), String(message), createdAt);
-      if (fbMirror) {
-        try {
-          await fbMirror.mirrorContactMessage({
-            name: String(name),
-            email: String(email).toLowerCase(),
-            phone: String(phone),
-            subject: String(subject),
-            message: String(message),
-            created_at: createdAt
-          });
-        } catch (_) {}
-      }
-      try { await sendOtpEmail("support@whiteteakllc.com", `CONTACT from ${email}: ${subject}`); } catch { /* optional */ }
+        .run(contactMessage.name, contactMessage.email, contactMessage.phone, contactMessage.subject, contactMessage.message, contactMessage.created_at);
+      saveDbSafe("contact");
+      if (fbMirror) { try { await fbMirror.mirrorContactMessage(contactMessage); } catch (_) {} }
+      const contactSubject = `Contact message: ${contactMessage.subject}`;
+      const contactResult = await sendTrackedEmail("contact_admin", getAdminNotificationEmail(), contactSubject, contactMessage.email, () => sendContactNotificationEmail(contactMessage));
+      if (!contactResult.sent) console.warn("[contact-email] notification failed:", emailEventError(contactResult.error));
       json(res, 200, { ok: true });
       return;
     } catch (e) { json(res, 400, { error: e.message }); return; }
@@ -6416,7 +6665,16 @@ async function handleRequest(req, res) {
       const email = String(payload.email || "").toLowerCase();
       const rand = (n) => crypto.randomBytes(n).toString("hex").toUpperCase().slice(0, n * 2);
       const token = `MP-${rand(2)}-${rand(2)}`;
-      db.prepare("INSERT INTO support_tokens (token, email, created_at) VALUES (?, ?, ?)").run(token, email, new Date().toISOString());
+      const createdAt = new Date().toISOString();
+      const entry = { token, email, created_at: createdAt };
+      db.prepare("INSERT INTO support_tokens (token, email, created_at) VALUES (?, ?, ?)").run(token, email, createdAt);
+      saveDbSafe("support-token");
+      if (fbMirror && fbMirror.mirrorSupportToken) { try { await fbMirror.mirrorSupportToken(entry); } catch (_) {} }
+      if (email) {
+        const subject = `Your WhiteTeak LLC support token ${token}`;
+        const result = await sendTrackedEmail("support_token", email, subject, token, () => sendSupportTokenEmail(entry));
+        if (!result.sent) console.warn("[support-token-email] notification failed:", emailEventError(result.error));
+      }
       json(res, 200, { ok: true, token });
       return;
     } catch (e) { json(res, 400, { error: e.message }); return; }
@@ -6460,6 +6718,7 @@ async function handleRequest(req, res) {
         db.prepare("INSERT INTO product_reviews (product_id, user_email, user_name, rating, title, body, created_at, hidden) VALUES (?,?,?,?,?,?,?,0)")
           .run(productId, currentUser.email, currentUser.name, rating, title || "Customer review", body, new Date().toISOString());
       }
+      saveDbSafe("reviews");
       json(res, 200, { ok: true });
       return;
     } catch (e) { json(res, 400, { error: e.message }); return; }
@@ -6470,8 +6729,8 @@ async function handleRequest(req, res) {
     const parts = pathname.split("/");
     const id = Number(parts[3]);
     const action = parts[4];
-    if (id && action === "delete") { db.prepare("DELETE FROM product_reviews WHERE id=?").run(id); }
-    else if (id && action === "hide") { db.prepare("UPDATE product_reviews SET hidden=1 WHERE id=?").run(id); }
+    if (id && action === "delete") { db.prepare("DELETE FROM product_reviews WHERE id=?").run(id); saveDbSafe("reviews-delete"); }
+    else if (id && action === "hide") { db.prepare("UPDATE product_reviews SET hidden=1 WHERE id=?").run(id); saveDbSafe("reviews-hide"); }
     res.writeHead(302, { Location: "/admin?section=reviews" }); res.end(); return;
   }
 
@@ -6485,9 +6744,11 @@ async function handleRequest(req, res) {
       if (pathname.endsWith("/add")) {
         try {
           db.prepare("INSERT INTO wishlists (user_email, product_id, created_at) VALUES (?,?,?)").run(currentUser.email, productId, new Date().toISOString());
+          saveDbSafe("wishlist-add");
         } catch (_e) { /* already exists */ }
       } else {
         db.prepare("DELETE FROM wishlists WHERE user_email=? AND product_id=?").run(currentUser.email, productId);
+        saveDbSafe("wishlist-remove");
       }
       json(res, 200, { ok: true });
       return;
