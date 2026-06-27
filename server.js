@@ -27,6 +27,7 @@ const {
   sendOtpEmail,
   sendOrderAdminEmail,
   sendOrderCustomerEmail,
+  sendCustomerInvoiceEmail,
   sendContactNotificationEmail,
   sendNewsletterNotificationEmail,
   sendSupportTokenEmail,
@@ -1021,6 +1022,14 @@ async function sendOrderNotifications(order, items) {
   const customerSubject = `Your WhiteTeak LLC order ${order.order_code || ""}`;
   const customerResult = await sendTrackedEmail("order_customer", order.email, customerSubject, order.order_code, () => sendOrderCustomerEmail(order, items));
   if (!customerResult.sent) console.warn("[order-email] customer notification failed:", emailEventError(customerResult.error));
+}
+
+async function sendPaidInvoice(order, items) {
+  if (!order || order.status !== "Paid") return null;
+  const subject = `Invoice INV-${order.order_code || "ORDER"} for your WhiteTeak LLC order`;
+  const result = await sendTrackedEmail("invoice_customer", order.email, subject, order.order_code, () => sendCustomerInvoiceEmail(order, items));
+  if (!result.sent) console.warn("[invoice-email] customer invoice failed:", emailEventError(result.error));
+  return result;
 }
 
 async function persistOrder(o, items, status, paymentMethod = "COD", paymentMeta = {}) {
@@ -4365,6 +4374,11 @@ async function getAdminData({ q = "" } = {}) {
 function adminPage(user = null, opts = {}) {
   const section = opts.section || "dashboard";
   const q = (opts.q || "").trim();
+  const adminMessage = String(opts.message || "").trim();
+  const adminError = String(opts.error || "").trim();
+  const adminNotice = adminMessage || adminError
+    ? `<div class="cr-admin-alert ${adminError ? "is-error" : "is-success"}">${escapeHtml(adminError || adminMessage)}</div>`
+    : "";
   const adminData = opts.adminData || { orders: [], contacts: [], newsletter: [], supportTokens: [], otpLogs: [], emailEvents: [], customers: [], searchResults: null };
   const mergedOrders = adminData.orders || [];
   const stats = {
@@ -4567,24 +4581,36 @@ function adminPage(user = null, opts = {}) {
       <div class="cr-admin-card-head"><h3>User Management (${userCount})</h3></div>
       <div style="overflow-x:auto">
       <table class="cr-admin-table">
-        <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Mobile (from checkout)</th><th>Password (masked)</th><th>Verified</th><th>Orders</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Mobile</th><th>Security</th><th>Verified</th><th>Orders</th><th>Actions</th></tr></thead>
         <tbody>
           ${allUsers.length ? allUsers.map(u => {
             const orders = db.prepare("SELECT order_code FROM orders WHERE email = ? ORDER BY id DESC").all(u.email);
             const refs = orders.map(o => o.order_code).join(", ") || "—";
             const phoneRow = db.prepare("SELECT phone FROM orders WHERE email = ? AND phone IS NOT NULL AND phone != '' ORDER BY id DESC LIMIT 1").get(u.email);
             const phone = phoneRow && phoneRow.phone ? String(phoneRow.phone) : "";
-            const phoneCell = phone ? `<a href="tel:${escapeHtml(phone)}">${escapeHtml(phone)}</a>` : `<span style="color:#999">not provided</span>`;
+            const phoneCell = phone ? `<a href="tel:${escapeHtml(phone)}">${escapeHtml(phone)}</a>` : `<span class="cr-admin-muted">not provided</span>`;
+            const isSyntheticAdmin = String(u.email || "").toLowerCase() === String(ADMIN_SYNTHETIC_EMAIL || "").toLowerCase();
             return `<tr>
               <td>${u.id}</td>
               <td>${escapeHtml(u.name)}</td>
               <td>${escapeHtml(u.email)}</td>
               <td>${phoneCell}</td>
-              <td><code>${escapeHtml(maskedPwd(u.password_hash))}</code></td>
-              <td>${u.verified ? "Yes" : "No"}</td>
+              <td><span class="cr-admin-muted">hashed</span><br><code>${escapeHtml(maskedPwd(u.password_hash))}</code></td>
+              <td><span class="cr-admin-badge ${u.verified ? "is-verified" : "is-unverified"}">${u.verified ? "Verified" : "Unverified"}</span></td>
               <td>${escapeHtml(refs)}</td>
+              <td>
+                <div class="cr-admin-user-actions">
+                  ${u.verified ? "" : `<form method="POST" action="/admin/users/force-verify" class="cr-admin-inline-form" onsubmit="return confirm('Force verify ${escapeHtml(u.email)}?')"><input type="hidden" name="email" value="${escapeHtml(u.email)}"><button class="cr-admin-ghost" type="submit">Force verify</button></form>`}
+                  <form method="POST" action="/admin/users/reset-password" class="cr-admin-inline-form" onsubmit="return confirm('Reset password for ${escapeHtml(u.email)}?')">
+                    <input type="hidden" name="email" value="${escapeHtml(u.email)}">
+                    <input class="cr-admin-mini-input" type="password" name="password" minlength="6" placeholder="New password" ${isSyntheticAdmin ? "disabled" : "required"}>
+                    <button class="cr-admin-primary" type="submit" ${isSyntheticAdmin ? "disabled" : ""}>Reset</button>
+                  </form>
+                  ${isSyntheticAdmin ? `<span class="cr-admin-muted">Admin account protected</span>` : ""}
+                </div>
+              </td>
             </tr>`;
-          }).join("") : `<tr><td colspan="7">No users registered yet.</td></tr>`}
+          }).join("") : `<tr><td colspan="8">No users registered yet.</td></tr>`}
         </tbody>
       </table>
       </div>
@@ -4806,6 +4832,7 @@ function adminPage(user = null, opts = {}) {
             </div>
           </header>
 
+          ${adminNotice}
           ${mainBody}
         </div>
       </main>
@@ -5732,7 +5759,13 @@ async function handleRequest(req, res) {
     const section = url.searchParams.get("section") || "dashboard";
     const q = url.searchParams.get("q") || "";
     const adminData = await getAdminData({ section, q });
-    html(res, 200, adminPage(adminUser, { section, q, adminData }));
+    html(res, 200, adminPage(adminUser, {
+      section,
+      q,
+      adminData,
+      message: url.searchParams.get("message") || "",
+      error: url.searchParams.get("error") || ""
+    }));
     return;
   }
 
@@ -5880,6 +5913,45 @@ async function handleRequest(req, res) {
     }
     res.writeHead(302, { Location: "/admin?section=orders" });
     res.end();
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/admin/users/force-verify") {
+    if (!isAdmin(currentUser)) {
+      res.writeHead(302, { Location: "/admin/login" }); res.end(); return;
+    }
+    const body = parseFormEncoded(await readBody(req));
+    const email = String(body.email || "").trim().toLowerCase();
+    const back = (message, isError = false) => {
+      res.writeHead(302, { Location: `/admin?section=settings&${isError ? "error" : "message"}=${encodeURIComponent(message)}` });
+      res.end();
+    };
+    if (!email) { back("Missing user email.", true); return; }
+    const target = await dataLayer.getUserByEmail(email);
+    if (!target) { back("User not found.", true); return; }
+    await dataLayer.markUserVerified(email);
+    back(`Verified ${email}.`);
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/admin/users/reset-password") {
+    if (!isAdmin(currentUser)) {
+      res.writeHead(302, { Location: "/admin/login" }); res.end(); return;
+    }
+    const body = parseFormEncoded(await readBody(req));
+    const email = String(body.email || "").trim().toLowerCase();
+    const password = String(body.password || "");
+    const back = (message, isError = false) => {
+      res.writeHead(302, { Location: `/admin?section=settings&${isError ? "error" : "message"}=${encodeURIComponent(message)}` });
+      res.end();
+    };
+    if (!email) { back("Missing user email.", true); return; }
+    if (email === String(ADMIN_SYNTHETIC_EMAIL || "").toLowerCase()) { back("Admin account password reset is protected here. Change ADMIN_PASSWORD in environment settings instead.", true); return; }
+    if (password.length < 6) { back("Password must be at least 6 characters.", true); return; }
+    const target = await dataLayer.getUserByEmail(email);
+    if (!target) { back("User not found.", true); return; }
+    await dataLayer.updateUserPassword(email, password);
+    back(`Password reset for ${email}. Share the new password securely and ask the user to change it after login.`);
     return;
   }
 
@@ -6205,6 +6277,7 @@ async function handleRequest(req, res) {
         paypalOrderId,
         paypalCaptureId: captureEntry && captureEntry.id ? captureEntry.id : null
       });
+      await sendPaidInvoice(saved.order, saved.items);
       json(res, 201, { ok: true, orderCode: saved.orderCode, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
       return;
     } catch (error) {
@@ -6257,6 +6330,7 @@ async function handleRequest(req, res) {
       validateCheckoutPayload(o);
       const items = hydrateOrderItems(o.items);
       const saved = await persistOrder(o, items, "Paid", "razorpay");
+      await sendPaidInvoice(saved.order, saved.items);
       json(res, 201, { orderCode: saved.orderCode, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
       return;
     } catch (error) {

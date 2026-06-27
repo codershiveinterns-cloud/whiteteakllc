@@ -190,6 +190,33 @@ async function sendOrderCustomerEmail(order, items = []) {
   return sendMailMessage({ to: order.email, subject, text, html });
 }
 
+async function sendCustomerInvoiceEmail(order, items = []) {
+  if (!order || !order.email) return { sent: false, mode: "skip", error: "missing customer email" };
+  const address = [order.address, order.city, order.state, order.pincode].filter(Boolean).join(", ");
+  const invoiceNo = `INV-${order.order_code || "ORDER"}`;
+  const subject = `Invoice ${invoiceNo} for your WhiteTeak LLC order`;
+  const text = `Invoice ${invoiceNo}\n\nOrder: ${order.order_code}\nCustomer: ${order.customer_name || ""}\nEmail: ${order.email}\nPayment: ${order.payment_method || ""} - ${order.status || "Paid"}\nDate: ${order.created_at || ""}\nShip to: ${address}\n\nItems:\n${formatOrderItems(items)}\n\nGrand total: ${formatMoney(order.total)}\n\nThank you for shopping with WhiteTeak LLC. For help, reply to this email.`;
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#111;background:#fff">
+    <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:3px solid #0d9488;padding-bottom:16px;margin-bottom:18px">
+      <div><div style="font-size:22px;font-weight:800;color:#0f766e">WhiteTeak LLC</div><div style="font-size:12px;color:#64748b">Official tax invoice / receipt</div></div>
+      <div style="text-align:right"><div style="font-size:13px;color:#64748b">Invoice</div><div style="font-size:18px;font-weight:800">${escapeHtml(invoiceNo)}</div></div>
+    </div>
+    <p><strong>Order:</strong> ${escapeHtml(order.order_code || "")}<br>
+    <strong>Customer:</strong> ${escapeHtml(order.customer_name || "")}<br>
+    <strong>Email:</strong> ${escapeHtml(order.email || "")}<br>
+    <strong>Payment:</strong> ${escapeHtml(order.payment_method || "")} - ${escapeHtml(order.status || "Paid")}<br>
+    <strong>Date:</strong> ${escapeHtml(order.created_at || "")}<br>
+    <strong>Ship to:</strong> ${escapeHtml(address)}</p>
+    <table style="width:100%;border-collapse:collapse;margin:18px 0;border:1px solid #e5e7eb">
+      <thead><tr style="background:#f8fafc"><th align="left" style="padding:10px;border-bottom:1px solid #e5e7eb">Item</th><th style="padding:10px;border-bottom:1px solid #e5e7eb">Qty</th><th align="right" style="padding:10px;border-bottom:1px solid #e5e7eb">Unit</th><th align="right" style="padding:10px;border-bottom:1px solid #e5e7eb">Line</th></tr></thead>
+      <tbody>${orderItemsRows(items)}</tbody>
+      <tfoot><tr><td colspan="3" align="right" style="padding:12px;font-weight:800;background:#f8fafc">Grand total</td><td align="right" style="padding:12px;font-weight:800;background:#f8fafc">${formatMoney(order.total)}</td></tr></tfoot>
+    </table>
+    <p style="font-size:13px;color:#475569">Thank you for shopping with WhiteTeak LLC. For support, reply to this email or contact <a href="mailto:support@whiteteakllc.com">support@whiteteakllc.com</a>.</p>
+  </div>`;
+  return sendMailMessage({ to: order.email, subject, text, html });
+}
+
 async function sendContactNotificationEmail(message) {
   const to = getAdminNotifyEmail();
   const subject = `Contact message: ${message.subject || "WhiteTeak LLC"}`;
@@ -229,6 +256,7 @@ module.exports = {
   sendOtpEmail,
   sendOrderAdminEmail,
   sendOrderCustomerEmail,
+  sendCustomerInvoiceEmail,
   sendContactNotificationEmail,
   sendNewsletterNotificationEmail,
   sendSupportTokenEmail,
