@@ -39,6 +39,7 @@ try { productsV2 = require("./data/products-v2.json"); } catch { productsV2 = []
 
 const PORT = process.env.PORT || 3000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
+const IS_PRODUCTION = process.env.NODE_ENV === "production" || IS_VERCEL;
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = IS_VERCEL ? "/tmp" : path.join(ROOT, "data");
@@ -4081,6 +4082,12 @@ function logOtpDeliveryFailure(scope, email, mailResult) {
   console.warn(`[${scope}] OTP email delivery failed for ${email}: ${detail}`);
 }
 
+function logOtpDebug(scope, email, otp, verifyLink = "") {
+  if (IS_PRODUCTION) return;
+  const suffix = verifyLink ? ` — verify link: ${verifyLink}` : "";
+  console.log(`[${scope}] OTP for ${email}: ${otp}${suffix}`);
+}
+
 function signupPage({ message = "", error = "", name = "", email = "" } = {}, user = null) {
   return layout({
     title: "Sign up | WHITETEAKLLC",
@@ -5770,13 +5777,18 @@ async function handleRequest(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/admin/smtp-test") {
+    if (!isAdmin(currentUser)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Admin access required" }));
+      return;
+    }
     // Attempts a real SMTP connection and reports the error if one occurs.
     // Safe: doesn't actually send mail unless ?to=email is given.
     const out = {
-      SMTP_HOST: process.env.SMTP_HOST || null,
-      SMTP_PORT: process.env.SMTP_PORT || null,
-      SMTP_USER: process.env.SMTP_USER || null,
-      SMTP_FROM: process.env.SMTP_FROM || null,
+      SMTP_HOST_set: Boolean(process.env.SMTP_HOST),
+      SMTP_PORT_set: Boolean(process.env.SMTP_PORT),
+      SMTP_USER_set: Boolean(process.env.SMTP_USER),
+      SMTP_FROM_set: Boolean(process.env.SMTP_FROM),
       nodemailer: false,
       connect_ok: false,
       connect_error: null,
@@ -5828,6 +5840,11 @@ async function handleRequest(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/admin/env-check") {
+    if (!isAdmin(currentUser)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Admin access required" }));
+      return;
+    }
     // Safe diagnostic: reports only whether each env var is non-empty, never the value.
     let nodemailerOk = false;
     try { require("nodemailer"); nodemailerOk = true; } catch { nodemailerOk = false; }
@@ -5849,6 +5866,7 @@ async function handleRequest(req, res) {
       FIREBASE_SERVICE_ACCOUNT_set: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT),
       FIREBASE_PROJECT_ID_set: Boolean(process.env.FIREBASE_PROJECT_ID),
       firebase_mirror_enabled: Boolean(fbMirror && fbMirror.isEnabled && fbMirror.isEnabled()),
+      auth_store_backend: dataLayer && dataLayer.backend ? dataLayer.backend : "unknown",
       admin_notify_recipient: getAdminNotificationEmail(),
       nodemailer_installed: nodemailerOk,
       dotenv_file_present: fs.existsSync(path.join(ROOT, ".env")),
@@ -6021,7 +6039,7 @@ async function handleRequest(req, res) {
     await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
     const mailResult = await sendTrackedEmail("otp_reset", email, "Your WhiteTeak LLC verification code", email, () => sendOtpEmail(email, otp, { expiresInMinutes: 10 }));
     logOtpDeliveryFailure("forgot", email, mailResult);
-    console.log(`[forgot] reset OTP for ${email}: ${otp}`);
+    logOtpDebug("forgot", email, otp);
     let maskedPhone = "";
     try {
       const row = db.prepare("SELECT phone FROM orders WHERE email = ? AND phone IS NOT NULL AND phone != '' ORDER BY id DESC LIMIT 1").get(email);
@@ -6053,7 +6071,7 @@ async function handleRequest(req, res) {
     await dataLayer.saveOtp({ email, code: otp, purpose: "reset", expiresAt });
     const mailResult = await sendTrackedEmail("otp_reset_resend", email, "Your WhiteTeak LLC verification code", email, () => sendOtpEmail(email, otp, { expiresInMinutes: 10 }));
     logOtpDeliveryFailure("forgot-resend", email, mailResult);
-    console.log(`[forgot-resend] reset OTP for ${email}: ${otp}`);
+    logOtpDebug("forgot-resend", email, otp);
     const mailMessage = getOtpDeliveryMessage(mailResult, "resent");
     html(res, 200, resetPasswordPage({ email, message: mailMessage }, currentUser));
     return;
@@ -6118,8 +6136,8 @@ async function handleRequest(req, res) {
     const proto = req.headers["x-forwarded-proto"] || "http";
     const verifyLink = `${proto}://${host}/auth/verify?email=${encodeURIComponent(email)}&token=${otp}`;
     const mailResult = await sendTrackedEmail("otp_register", email, "Your WhiteTeak LLC verification code", email, () => sendOtpEmail(email, otp, { verifyLink, expiresInMinutes: 10 }));
-    console.log(`[signup] OTP for ${email}: ${otp} — verify link: ${verifyLink}`);
-    html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp, verifyLink }));
+    logOtpDebug("signup", email, otp, verifyLink);
+    html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp: IS_PRODUCTION ? "" : otp, verifyLink: IS_PRODUCTION ? "" : verifyLink }));
     return;
   }
 
@@ -6462,8 +6480,8 @@ async function handleRequest(req, res) {
     const verifyLink = `${proto}://${host}/auth/verify?email=${encodeURIComponent(email)}&token=${otp}`;
     const mailResult = await sendTrackedEmail("otp_register_resend", email, "Your WhiteTeak LLC verification code", email, () => sendOtpEmail(email, otp, { verifyLink, expiresInMinutes: 10 }));
     logOtpDeliveryFailure("resend", email, mailResult);
-    console.log(`[resend] OTP for ${email}: ${otp}`);
-    html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp, verifyLink }, { error: "" }));
+    logOtpDebug("resend", email, otp, verifyLink);
+    html(res, 200, signupSuccessPage(email, currentUser, { mailResult, otp: IS_PRODUCTION ? "" : otp, verifyLink: IS_PRODUCTION ? "" : verifyLink }, { error: "" }));
     return;
   }
 

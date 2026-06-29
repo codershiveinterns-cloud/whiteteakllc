@@ -22,8 +22,25 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(check, "hex"));
 }
 
+function normalizeEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+function emailDocId(email) {
+  return Buffer.from(normalizeEmail(email)).toString("base64url");
+}
+
+function otpDocId(email, purpose) {
+  return `${emailDocId(email)}_${String(purpose || "auth").replace(/[^a-z0-9_-]/gi, "_")}`;
+}
+
+function isProductionRuntime() {
+  return process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
+}
+
 class SqliteStore {
   constructor(db) {
+    this.backend = "sqlite";
     this.db = db;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS users (
@@ -75,7 +92,7 @@ class SqliteStore {
   }
 
   async getUserByEmail(email) {
-    return this.db.prepare("SELECT * FROM users WHERE email = ?").get(email.toLowerCase()) || null;
+    return this.db.prepare("SELECT * FROM users WHERE email = ?").get(normalizeEmail(email)) || null;
   }
 
   async createUser({ name, email, password }) {
@@ -83,19 +100,19 @@ class SqliteStore {
     const passwordHash = hashPassword(password);
     this.db.prepare(
       "INSERT INTO users (name, email, password_hash, verified, created_at) VALUES (?, ?, ?, 0, ?)"
-    ).run(name, email.toLowerCase(), passwordHash, now);
+    ).run(name, normalizeEmail(email), passwordHash, now);
     this.saveDbSafe("create-user");
     return this.getUserByEmail(email);
   }
 
   async markUserVerified(email) {
-    this.db.prepare("UPDATE users SET verified = 1 WHERE email = ?").run(email.toLowerCase());
+    this.db.prepare("UPDATE users SET verified = 1 WHERE email = ?").run(normalizeEmail(email));
     this.saveDbSafe("verify-user");
   }
 
   async updateUserPassword(email, newPassword) {
     const passwordHash = hashPassword(newPassword);
-    this.db.prepare("UPDATE users SET password_hash = ? WHERE email = ?").run(passwordHash, email.toLowerCase());
+    this.db.prepare("UPDATE users SET password_hash = ? WHERE email = ?").run(passwordHash, normalizeEmail(email));
     this.saveDbSafe("update-password");
     return passwordHash;
   }
@@ -103,17 +120,17 @@ class SqliteStore {
   async saveOtp({ email, code, purpose, expiresAt }) {
     const now = new Date().toISOString();
     const codeHash = hashPassword(code);
-    this.db.prepare("UPDATE otp_codes SET consumed = 1 WHERE email = ? AND purpose = ? AND consumed = 0").run(email.toLowerCase(), purpose);
+    this.db.prepare("UPDATE otp_codes SET consumed = 1 WHERE email = ? AND purpose = ? AND consumed = 0").run(normalizeEmail(email), purpose);
     this.db.prepare(
       "INSERT INTO otp_codes (email, code_hash, purpose, expires_at, consumed, created_at) VALUES (?, ?, ?, ?, 0, ?)"
-    ).run(email.toLowerCase(), codeHash, purpose, expiresAt, now);
+    ).run(normalizeEmail(email), codeHash, purpose, expiresAt, now);
     this.saveDbSafe("save-otp");
   }
 
   async verifyOtp({ email, code, purpose }) {
     const row = this.db.prepare(
       "SELECT * FROM otp_codes WHERE email = ? AND purpose = ? AND consumed = 0 ORDER BY id DESC LIMIT 1"
-    ).get(email.toLowerCase(), purpose);
+    ).get(normalizeEmail(email), purpose);
     if (!row) return false;
     if (new Date(row.expires_at).getTime() < Date.now()) return false;
     const ok = verifyPassword(code, row.code_hash);
@@ -129,7 +146,7 @@ class SqliteStore {
     const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString();
     this.db.prepare(
       "INSERT INTO sessions (session_token, user_email, expires_at, created_at) VALUES (?, ?, ?, ?)"
-    ).run(token, email.toLowerCase(), expiresAt, now);
+    ).run(token, normalizeEmail(email), expiresAt, now);
     this.saveDbSafe("create-session");
     return { token, expiresAt };
   }
@@ -148,8 +165,153 @@ class SqliteStore {
   }
 }
 
+class FirestoreAuthStore {
+  constructor(sqliteStore, firestore) {
+    this.backend = "firestore";
+    this.sqliteStore = sqliteStore;
+    this.firestore = firestore;
+  }
+
+  userRef(email) {
+    return this.firestore.collection("auth_users").doc(emailDocId(email));
+  }
+
+  otpRef(email, purpose) {
+    return this.firestore.collection("auth_otp_codes").doc(otpDocId(email, purpose));
+  }
+
+  sessionRef(token) {
+    return this.firestore.collection("auth_sessions").doc(String(token));
+  }
+
+  normalizeUser(doc) {
+    if (!doc || !doc.exists) return null;
+    const data = doc.data() || {};
+    return {
+      id: doc.id,
+      name: data.name || data.email || "User",
+      email: normalizeEmail(data.email),
+      password_hash: data.password_hash || "",
+      verified: data.verified ? 1 : 0,
+      created_at: data.created_at || new Date().toISOString()
+    };
+  }
+
+  async getUserByEmail(email) {
+    const snap = await this.userRef(email).get();
+    return this.normalizeUser(snap);
+  }
+
+  async createUser({ name, email, password }) {
+    const lower = normalizeEmail(email);
+    const ref = this.userRef(lower);
+    const existing = await ref.get();
+    if (existing.exists) return this.normalizeUser(existing);
+    const now = new Date().toISOString();
+    const user = {
+      name,
+      email: lower,
+      password_hash: hashPassword(password),
+      verified: 0,
+      created_at: now
+    };
+    await ref.set(user, { merge: false });
+    if (fbMirror) { try { await fbMirror.mirrorUser(user); } catch (_) {} }
+    return { id: ref.id, ...user };
+  }
+
+  async markUserVerified(email) {
+    const lower = normalizeEmail(email);
+    await this.userRef(lower).set({ email: lower, verified: 1, verified_at: new Date().toISOString() }, { merge: true });
+    if (fbMirror) {
+      try {
+        const user = await this.getUserByEmail(lower);
+        if (user) await fbMirror.mirrorUser(user);
+      } catch (_) { /* mirror is best-effort */ }
+    }
+  }
+
+  async updateUserPassword(email, newPassword) {
+    const lower = normalizeEmail(email);
+    const passwordHash = hashPassword(newPassword);
+    await this.userRef(lower).set({ email: lower, password_hash: passwordHash, updated_at: new Date().toISOString() }, { merge: true });
+    if (fbMirror) { try { await fbMirror.mirrorPasswordReset(lower); } catch (_) {} }
+    return passwordHash;
+  }
+
+  async saveOtp({ email, code, purpose, expiresAt }) {
+    const lower = normalizeEmail(email);
+    const now = new Date().toISOString();
+    const entry = {
+      email: lower,
+      purpose,
+      code_hash: hashPassword(code),
+      expires_at: expiresAt,
+      consumed: false,
+      created_at: now
+    };
+    await this.otpRef(lower, purpose).set(entry, { merge: false });
+    if (fbMirror) {
+      try {
+        await fbMirror.mirrorOtpLog({
+          email: lower,
+          purpose,
+          expires_at: expiresAt,
+          created_at: now
+        });
+      } catch (_) { /* mirror is best-effort */ }
+    }
+  }
+
+  async verifyOtp({ email, code, purpose }) {
+    const ref = this.otpRef(email, purpose);
+    const snap = await ref.get();
+    if (!snap.exists) return false;
+    const row = snap.data() || {};
+    if (row.consumed) return false;
+    if (normalizeEmail(row.email) !== normalizeEmail(email)) return false;
+    if (String(row.purpose) !== String(purpose)) return false;
+    if (new Date(row.expires_at).getTime() < Date.now()) return false;
+    const ok = verifyPassword(code, row.code_hash);
+    if (!ok) return false;
+    await ref.set({ consumed: true, consumed_at: new Date().toISOString() }, { merge: true });
+    return true;
+  }
+
+  async createSession(email) {
+    const token = crypto.randomBytes(32).toString("hex");
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString();
+    await this.sessionRef(token).set({
+      session_token: token,
+      user_email: normalizeEmail(email),
+      expires_at: expiresAt,
+      created_at: now
+    });
+    return { token, expiresAt };
+  }
+
+  async getSession(token) {
+    const ref = this.sessionRef(token);
+    const snap = await ref.get();
+    if (!snap.exists) return null;
+    const row = snap.data() || {};
+    if (new Date(row.expires_at).getTime() < Date.now()) {
+      try { await ref.delete(); } catch (_) {}
+      return null;
+    }
+    const user = await this.getUserByEmail(row.user_email);
+    return user ? { ...row, user } : null;
+  }
+
+  async deleteSession(token) {
+    await this.sessionRef(token).delete();
+  }
+}
+
 class MongoMirrorStore {
   constructor(sqliteStore, uri) {
+    this.backend = "mongo-mirror";
     this.sqliteStore = sqliteStore;
     this.uri = uri;
     this.client = null;
@@ -171,7 +333,7 @@ class MongoMirrorStore {
 
   async getUserByEmail(email) {
     if (this.db) {
-      const user = await this.db.collection("users").findOne({ email: email.toLowerCase() });
+      const user = await this.db.collection("users").findOne({ email: normalizeEmail(email) });
       if (user) return user;
     }
     return this.sqliteStore.getUserByEmail(email);
@@ -194,7 +356,7 @@ class MongoMirrorStore {
     await this.sqliteStore.markUserVerified(email);
     if (this.db) {
       await this.db.collection("users").updateOne(
-        { email: email.toLowerCase() },
+        { email: normalizeEmail(email) },
         { $set: { verified: 1 } }
       );
     }
@@ -210,7 +372,7 @@ class MongoMirrorStore {
     const passwordHash = await this.sqliteStore.updateUserPassword(email, newPassword);
     if (this.db) {
       await this.db.collection("users").updateOne(
-        { email: email.toLowerCase() },
+        { email: normalizeEmail(email) },
         { $set: { password_hash: passwordHash } }
       );
     }
@@ -222,7 +384,7 @@ class MongoMirrorStore {
     await this.sqliteStore.saveOtp(payload);
     if (this.db) {
       await this.db.collection("otp_codes").insertOne({
-        email: payload.email.toLowerCase(),
+        email: normalizeEmail(payload.email),
         purpose: payload.purpose,
         expires_at: payload.expiresAt,
         created_at: new Date().toISOString()
@@ -231,7 +393,7 @@ class MongoMirrorStore {
     if (fbMirror) {
       try {
         await fbMirror.mirrorOtpLog({
-          email: payload.email.toLowerCase(),
+          email: normalizeEmail(payload.email),
           purpose: payload.purpose,
           expires_at: payload.expiresAt,
           created_at: new Date().toISOString()
@@ -249,7 +411,7 @@ class MongoMirrorStore {
     if (this.db) {
       await this.db.collection("sessions").updateOne(
         { session_token: session.token },
-        { $set: { session_token: session.token, user_email: email.toLowerCase(), expires_at: session.expiresAt } },
+        { $set: { session_token: session.token, user_email: normalizeEmail(email), expires_at: session.expiresAt } },
         { upsert: true }
       );
     }
@@ -270,9 +432,23 @@ class MongoMirrorStore {
 
 async function createDataLayer(db, mongoUri) {
   const sqliteStore = new SqliteStore(db);
-  const store = new MongoMirrorStore(sqliteStore, mongoUri);
-  await store.init();
-  return store;
+
+  if (fbMirror && fbMirror.isEnabled && fbMirror.isEnabled() && fbMirror.getFirestore) {
+    const firestore = fbMirror.getFirestore();
+    if (firestore) return new FirestoreAuthStore(sqliteStore, firestore);
+  }
+
+  if (isProductionRuntime()) {
+    throw new Error("Firebase Firestore credentials are required for auth/OTP/session persistence on Vercel. Set FIREBASE_SERVICE_ACCOUNT or FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY.");
+  }
+
+  if (mongoUri) {
+    const store = new MongoMirrorStore(sqliteStore, mongoUri);
+    await store.init();
+    return store;
+  }
+
+  return sqliteStore;
 }
 
 module.exports = {

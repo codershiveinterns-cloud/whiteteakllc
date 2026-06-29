@@ -73,6 +73,11 @@ function isEnabled() {
   return Boolean(firestore);
 }
 
+function getFirestore() {
+  if (!initialized) init();
+  return firestore;
+}
+
 async function safeWrite(collection, docId, data) {
   if (!isEnabled()) return { mirrored: false };
   try {
@@ -185,6 +190,7 @@ async function updateOrderStatus(orderCode, status) {
 module.exports = {
   init,
   isEnabled,
+  getFirestore,
   mirrorUser,
   mirrorOrder,
   mirrorContactMessage,

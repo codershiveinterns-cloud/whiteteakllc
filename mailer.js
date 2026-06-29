@@ -15,6 +15,10 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function isProductionRuntime() {
+  return process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
+}
+
 function getMailerConfig() {
   const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_REPLY_TO } = process.env;
   if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !nodemailer) {
@@ -67,7 +71,7 @@ async function sendMailMessage({ to, subject, text, html, replyTo }) {
   if (!config) {
     return {
       sent: false,
-      mode: "dev",
+      mode: isProductionRuntime() ? "misconfigured" : "dev",
       error: !nodemailer ? "nodemailer is not installed" : "SMTP_HOST, SMTP_USER, or SMTP_PASS is missing"
     };
   }
@@ -124,7 +128,8 @@ async function sendOtpEmail(email, otp, options = "") {
            </div>`
   });
 
-  return result.sent ? result : { ...result, otp, verifyLink };
+  if (result.sent || isProductionRuntime()) return result;
+  return { ...result, otp, verifyLink };
 }
 
 function formatMoney(value) {

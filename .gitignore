@@ -1,4 +1,23 @@
 node_modules/
+
+# Local secrets - never commit real credentials
+.env
+.env.*
+!.env.example
+
+# Local databases and backups
 data/store.db
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/store.db.backup-*
+
+# Logs
 server.err
 server.log
+*.log
+
+# Local deployment/tooling state
+.vercel/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
