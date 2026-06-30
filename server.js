@@ -1630,8 +1630,20 @@ if (!ADMIN_USERNAME || !ADMIN_PASSWORD) {
   console.warn("[warn] ADMIN_USERNAME / ADMIN_PASSWORD not set. Admin login disabled. Copy .env.example to .env.");
 }
 
+function normalizeOrderEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
 function getOrdersByEmail(email) {
-  return db.prepare("SELECT * FROM orders WHERE email = ? ORDER BY id DESC").all(email.toLowerCase());
+  return db.prepare("SELECT * FROM orders WHERE email = ? ORDER BY id DESC").all(normalizeOrderEmail(email));
+}
+
+function userOwnsOrder(user, order) {
+  return Boolean(user && order && normalizeOrderEmail(user.email) === normalizeOrderEmail(order.email));
+}
+
+function canViewOrderDetails(user, order) {
+  return Boolean(order && (isAdmin(user) || userOwnsOrder(user, order)));
 }
 
 function parseListField(value) {
@@ -4326,6 +4338,42 @@ function parseItems(itemsJson) {
   try { return JSON.parse(itemsJson || "[]"); } catch { return []; }
 }
 
+function orderItems(order) {
+  if (!order) return [];
+  if (Array.isArray(order.items)) return order.items;
+  return parseItems(order.items_json);
+}
+
+function formatAdminDate(value, withTime = true) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return "—";
+  return withTime ? date.toLocaleString("en-IN") : date.toLocaleDateString("en-IN");
+}
+
+function orderAddress(order) {
+  return [order && order.address, order && order.city, order && order.state, order && order.pincode].filter(Boolean).join(", ");
+}
+
+function orderItemsSummary(order, limit = 3) {
+  const items = orderItems(order);
+  const summary = items.slice(0, limit).map((item) => `${item.quantity || 1} x ${item.name || "Item"}`).join("; ");
+  return summary + (items.length > limit ? ` +${items.length - limit} more` : "");
+}
+
+function renderAdminItems(items) {
+  if (!items.length) return `<span class="cr-admin-muted">No items</span>`;
+  return `<ul class="cr-admin-detail-list">${items.map((item) => {
+    const qty = Number(item.quantity || 1);
+    const price = Number(item.price || item.unit_price || 0);
+    const lineTotal = price ? qty * price : 0;
+    return `<li><strong>${escapeHtml(item.name || "Item")}</strong><span>Qty ${qty}${price ? ` · ${currency(price)} each · ${currency(lineTotal)}` : ""}</span></li>`;
+  }).join("")}</ul>`;
+}
+
+function invoiceRef(order) {
+  return order && order.order_code ? `INV-${order.order_code}` : "—";
+}
+
 function mergeByKey(primary, secondary, keyFn) {
   const map = new Map();
   for (const row of [...primary, ...secondary]) {
@@ -4340,42 +4388,84 @@ function mergeByKey(primary, secondary, keyFn) {
 async function getAdminData({ q = "" } = {}) {
   const localOrders = db.prepare("SELECT * FROM orders ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" }));
   const localContacts = (() => { try { return db.prepare("SELECT * FROM contact_messages ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
-  const localNewsletter = (() => { try { return db.prepare("SELECT * FROM newsletter_subscribers ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
   const localSupportTokens = (() => { try { return db.prepare("SELECT * FROM support_tokens ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
-  const localOtpLogs = (() => { try { return db.prepare("SELECT email, purpose, expires_at, consumed, created_at FROM otp_codes ORDER BY id DESC LIMIT 250").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
-  const localEmailEvents = (() => { try { return db.prepare("SELECT * FROM email_events ORDER BY id DESC LIMIT 250").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
+  const localOtpLogs = (() => { try { return db.prepare("SELECT email, purpose, expires_at, consumed, created_at FROM otp_codes ORDER BY id DESC LIMIT 500").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
+  const localEmailEvents = (() => { try { return db.prepare("SELECT * FROM email_events ORDER BY id DESC LIMIT 500").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
+  const localUsers = (() => {
+    try { return db.prepare("SELECT id, name, email, verified, created_at FROM users ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); }
+    catch { return []; }
+  })();
 
-  const [fbOrders, fbContacts, fbNewsletter, fbOtpLogs, fbEmailEvents, fbSupportTokens] = fbMirror ? await Promise.all([
-    fbMirror.listOrders ? fbMirror.listOrders({ limit: 250 }) : [],
-    fbMirror.listContactMessages ? fbMirror.listContactMessages({ limit: 250 }) : [],
-    fbMirror.listNewsletterSubscribers ? fbMirror.listNewsletterSubscribers({ limit: 250 }) : [],
-    fbMirror.listOtpLogs ? fbMirror.listOtpLogs({ limit: 250 }) : [],
-    fbMirror.listEmailEvents ? fbMirror.listEmailEvents({ limit: 250 }) : [],
+  const [fbOrders, fbContacts, fbOtpLogs, fbEmailEvents, fbSupportTokens] = fbMirror ? await Promise.all([
+    fbMirror.listOrders ? fbMirror.listOrders({ limit: 500 }) : [],
+    fbMirror.listContactMessages ? fbMirror.listContactMessages({ limit: 500 }) : [],
+    fbMirror.listOtpLogs ? fbMirror.listOtpLogs({ limit: 500 }) : [],
+    fbMirror.listEmailEvents ? fbMirror.listEmailEvents({ limit: 500 }) : [],
     fbMirror.listSupportTokens ? fbMirror.listSupportTokens({ limit: 250 }) : []
-  ]) : [[], [], [], [], [], []];
+  ]) : [[], [], [], [], []];
 
   const orders = mergeByKey(localOrders, fbOrders, (row) => row.order_code);
-  const contacts = mergeByKey(localContacts, fbContacts, (row) => `${row.created_at || row._mirroredAt || ""}:${String(row.email || "").toLowerCase()}:${row.subject || ""}`);
-  const newsletter = mergeByKey(localNewsletter, fbNewsletter, (row) => String(row.email || "").toLowerCase());
+  const contacts = mergeByKey(localContacts, fbContacts, (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.subject || ""}`);
   const supportTokens = mergeByKey(localSupportTokens, fbSupportTokens, (row) => row.token || `${row.created_at}:${row.email}`);
-  const otpLogs = mergeByKey(localOtpLogs, fbOtpLogs, (row) => `${row.created_at || row._mirroredAt || ""}:${String(row.email || "").toLowerCase()}:${row.purpose || ""}`);
+  const otpLogsRaw = mergeByKey(localOtpLogs, fbOtpLogs, (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.purpose || ""}`);
   const emailEvents = mergeByKey(localEmailEvents, fbEmailEvents, (row) => `${row.created_at || row._mirroredAt || ""}:${row.recipient || ""}:${row.subject || ""}`);
+  const usersByEmail = new Map(localUsers.map((u) => [normalizeOrderEmail(u.email), u]));
   const customersMap = new Map();
-  for (const order of orders) {
-    const email = String(order.email || "").toLowerCase();
+
+  for (const user of localUsers) {
+    const email = normalizeOrderEmail(user.email);
     if (!email) continue;
-    const existing = customersMap.get(email) || { email, customer_name: order.customer_name || email, orders: 0, phone: order.phone || "" };
-    existing.orders += 1;
+    customersMap.set(email, { email, customer_name: user.name || email, phone: "", orders: 0, total_spent: 0, registered: true, verified: Number(user.verified || 0), registered_at: user.created_at || "", first_order_at: "", last_order_at: "", latest_address: "", city: "", state: "", pincode: "", order_refs: [] });
+  }
+
+  for (const order of orders) {
+    const email = normalizeOrderEmail(order.email);
+    if (!email) continue;
+    const existing = customersMap.get(email) || { email, customer_name: order.customer_name || email, phone: "", orders: 0, total_spent: 0, registered: false, verified: 0, registered_at: "", first_order_at: "", last_order_at: "", latest_address: "", city: "", state: "", pincode: "", order_refs: [] };
+    const orderDate = order.created_at || order._mirroredAt || "";
+    if ((!existing.customer_name || existing.customer_name === email) && order.customer_name) existing.customer_name = order.customer_name;
     if (!existing.phone && order.phone) existing.phone = order.phone;
+    existing.orders += 1;
+    existing.total_spent += Number(order.total || 0);
+    existing.first_order_at = !existing.first_order_at || (orderDate && new Date(orderDate) < new Date(existing.first_order_at)) ? orderDate : existing.first_order_at;
+    existing.last_order_at = !existing.last_order_at || (orderDate && new Date(orderDate) > new Date(existing.last_order_at)) ? orderDate : existing.last_order_at;
+    if (!existing.latest_address || orderDate === existing.last_order_at) {
+      existing.latest_address = orderAddress(order);
+      existing.city = order.city || existing.city;
+      existing.state = order.state || existing.state;
+      existing.pincode = order.pincode || existing.pincode;
+    }
+    if (order.order_code) existing.order_refs.push(order.order_code);
     customersMap.set(email, existing);
   }
+
+  for (const contact of contacts) {
+    const email = normalizeOrderEmail(contact.email);
+    if (!email) continue;
+    const existing = customersMap.get(email);
+    if (existing) {
+      if (!existing.phone && contact.phone) existing.phone = contact.phone;
+      if ((!existing.customer_name || existing.customer_name === email) && contact.name) existing.customer_name = contact.name;
+    }
+  }
+
+  const customers = Array.from(customersMap.values()).sort((a, b) => new Date(b.last_order_at || b.registered_at || 0) - new Date(a.last_order_at || a.registered_at || 0));
+  const customerByEmail = new Map(customers.map((c) => [normalizeOrderEmail(c.email), c]));
+  const otpLogs = otpLogsRaw.map((row) => {
+    const email = normalizeOrderEmail(row.email);
+    const user = usersByEmail.get(email) || null;
+    const customer = customerByEmail.get(email) || null;
+    return { ...row, email, user_name: user?.name || customer?.customer_name || "", user_verified: user ? Number(user.verified || 0) : Number(customer?.verified || 0), user_registered: Boolean(user || customer?.registered), phone: customer?.phone || "", order_count: customer?.orders || 0, last_order_at: customer?.last_order_at || "" };
+  });
+
   const search = String(q || "").trim().toLowerCase();
   const searchResults = search ? {
-    orders: orders.filter((o) => [o.order_code, o.customer_name, o.email, o.phone, o.total].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25),
+    orders: orders.filter((o) => [o.order_code, o.customer_name, o.email, o.phone, o.total, o.status].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25),
     products: db.prepare("SELECT * FROM products WHERE name LIKE ? OR brand LIKE ? OR price LIKE ? ORDER BY id DESC LIMIT 25").all(`%${q}%`, `%${q}%`, `%${q}%`).map(normalizeProduct),
-    contacts: contacts.filter((c) => [c.name, c.email, c.phone, c.subject, c.message].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25)
+    contacts: contacts.filter((c) => [c.name, c.email, c.phone, c.subject, c.message].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25),
+    customers: customers.filter((c) => [c.customer_name, c.email, c.phone, c.latest_address, c.order_refs.join(" ")].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25)
   } : null;
-  return { orders, contacts, newsletter, supportTokens, otpLogs, emailEvents, customers: Array.from(customersMap.values()), searchResults };
+  return { orders, contacts, supportTokens, otpLogs, emailEvents, users: localUsers, customers, searchResults };
 }
 
 function adminPage(user = null, opts = {}) {
@@ -4386,7 +4476,7 @@ function adminPage(user = null, opts = {}) {
   const adminNotice = adminMessage || adminError
     ? `<div class="cr-admin-alert ${adminError ? "is-error" : "is-success"}">${escapeHtml(adminError || adminMessage)}</div>`
     : "";
-  const adminData = opts.adminData || { orders: [], contacts: [], newsletter: [], supportTokens: [], otpLogs: [], emailEvents: [], customers: [], searchResults: null };
+  const adminData = opts.adminData || { orders: [], contacts: [], supportTokens: [], otpLogs: [], emailEvents: [], users: [], customers: [], searchResults: null };
   const mergedOrders = adminData.orders || [];
   const stats = {
     products: db.prepare("SELECT COUNT(*) AS count FROM products").get().count,
@@ -4404,10 +4494,18 @@ function adminPage(user = null, opts = {}) {
   const allProducts = db.prepare("SELECT * FROM products ORDER BY id DESC").all().map(normalizeProduct);
   const allOrders = mergedOrders;
   const allCustomers = adminData.customers || [];
-  let allUsers = [];
-  try {
-    allUsers = db.prepare("SELECT id, name, email, password_hash, verified FROM users ORDER BY id DESC").all();
-  } catch { allUsers = []; }
+  const customersByEmail = new Map(allCustomers.map((c) => [normalizeOrderEmail(c.email), c]));
+  const allUsers = adminData.users || [];
+  const invoiceEventsByRef = new Map();
+  for (const event of adminData.emailEvents || []) {
+    const ref = String(event.related_ref || "").trim();
+    if (ref && !invoiceEventsByRef.has(ref) && String(event.kind || "").includes("invoice")) invoiceEventsByRef.set(ref, event);
+  }
+  const invoiceStatus = (order) => {
+    const event = invoiceEventsByRef.get(String(order.order_code || ""));
+    if (event) return `${event.status || "sent"}${event.created_at ? ` · ${formatAdminDate(event.created_at)}` : ""}`;
+    return String(order.status || "").toLowerCase() === "paid" ? "Invoice pending email log" : "Pending payment";
+  };
 
   const searchResults = adminData.searchResults;
 
@@ -4419,11 +4517,11 @@ function adminPage(user = null, opts = {}) {
     <section class="cr-admin-card" id="products">
       <div class="cr-admin-card-head">
         <h3>All Products (${stats.products})</h3>
-        <a class="cr-admin-primary" href="#add-product">+ Add new product</a>
+        <a class="cr-admin-primary cr-admin-add-product" href="#add-product">+ Add Product</a>
       </div>
       <form method="POST" action="/admin/products/bulk-delete" onsubmit="return confirm('Delete selected products?')">
-        <div style="max-height:520px;overflow:auto">
-        <table class="cr-admin-table eo-admin-products-table">
+        <div class="cr-admin-scroll is-tall">
+        <table class="cr-admin-table eo-admin-products-table is-wide">
           <thead><tr><th><input type="checkbox" data-eo-check-all></th><th>Image</th><th>Name</th><th>Brand</th><th>Price</th><th>Stock</th><th>Actions</th></tr></thead>
           <tbody>
             ${allProducts.length ? allProducts.map((product) => `
@@ -4500,23 +4598,25 @@ function adminPage(user = null, opts = {}) {
 
   const ordersSection = `
     <section class="cr-admin-card" id="orders">
-      <div class="cr-admin-card-head"><h3>All Orders (${stats.orders})</h3></div>
-      <div style="overflow-x:auto">
-      <table class="cr-admin-table eo-admin-orders-table">
-        <thead><tr><th>Ref</th><th>Customer</th><th>Email / Phone</th><th>Date</th><th>Items</th><th>Shipping Address</th><th>Payment</th><th>Total</th><th>Status</th><th>Source</th></tr></thead>
+      <div class="cr-admin-card-head"><h3>All Orders & Invoices (${stats.orders})</h3></div>
+      <div class="cr-admin-scroll is-tall">
+      <table class="cr-admin-table eo-admin-orders-table is-wide">
+        <thead><tr><th>Order / Invoice</th><th>Customer</th><th>Email / Phone</th><th>Date</th><th>Items</th><th>Shipping Address</th><th>Payment</th><th>Invoice</th><th>Total</th><th>Status</th><th>Details</th><th>Source</th></tr></thead>
         <tbody>
           ${allOrders.length ? allOrders.map(order => {
-            const items = parseItems(order.items_json);
-            const itemSummary = items.slice(0, 3).map((item) => `${item.quantity || 1} x ${item.name || "Item"}`).join("; ") + (items.length > 3 ? ` +${items.length - 3} more` : "");
+            const items = orderItems(order);
+            const itemSummary = orderItemsSummary(order);
+            const paymentIds = [order.paypal_order_id ? `PayPal order: ${order.paypal_order_id}` : "", order.paypal_capture_id ? `Capture: ${order.paypal_capture_id}` : ""].filter(Boolean).join(" · ");
             return `
             <tr>
-              <td>${escapeHtml(order.order_code)}</td>
-              <td>${escapeHtml(order.customer_name)}</td>
+              <td><strong>${escapeHtml(order.order_code)}</strong><br><span class="cr-admin-muted">${escapeHtml(invoiceRef(order))}</span></td>
+              <td>${escapeHtml(order.customer_name || "")}</td>
               <td>${escapeHtml(order.email || "")}<br>${order.phone ? `<a href="tel:${escapeHtml(order.phone)}">${escapeHtml(order.phone)}</a>` : "—"}</td>
-              <td>${new Date(order.created_at || order._mirroredAt || Date.now()).toLocaleDateString("en-IN")}</td>
+              <td>${formatAdminDate(order.created_at || order._mirroredAt, false)}</td>
               <td>${escapeHtml(itemSummary || "—")}</td>
-              <td>${escapeHtml(order.address || "")}, ${escapeHtml(order.city || "")}, ${escapeHtml(order.state || "")} ${escapeHtml(order.pincode || "")}</td>
-              <td>${escapeHtml(order.payment_method || "COD")}</td>
+              <td>${escapeHtml(orderAddress(order) || "—")}</td>
+              <td>${escapeHtml(order.payment_method || "COD")}<br><span class="cr-admin-muted">${escapeHtml(paymentIds || "No provider ID")}</span></td>
+              <td>${escapeHtml(invoiceStatus(order))}</td>
               <td>${currency(order.total)}</td>
               <td>
                 <form method="POST" action="/admin/orders/status" class="eo-status-form" data-eo-status-form>
@@ -4527,9 +4627,20 @@ function adminPage(user = null, opts = {}) {
                   <noscript><button type="submit">Update</button></noscript>
                 </form>
               </td>
+              <td>
+                <details class="cr-admin-details">
+                  <summary>View</summary>
+                  <div><strong>Invoice:</strong> ${escapeHtml(invoiceRef(order))}</div>
+                  <div><strong>Full address:</strong> ${escapeHtml(orderAddress(order) || "—")}</div>
+                  <div><strong>Created:</strong> ${formatAdminDate(order.created_at || order._mirroredAt)}</div>
+                  <div><strong>Payment:</strong> ${escapeHtml(order.payment_method || "COD")} · ${escapeHtml(order.status || "")}</div>
+                  ${paymentIds ? `<div><strong>Provider IDs:</strong> ${escapeHtml(paymentIds)}</div>` : ""}
+                  <div><strong>Items:</strong>${renderAdminItems(items)}</div>
+                </details>
+              </td>
               <td>${sourceTag(order)}</td>
             </tr>`;
-          }).join("") : `<tr><td colspan="10">No orders yet.</td></tr>`}
+          }).join("") : `<tr><td colspan="12">No orders yet.</td></tr>`}
         </tbody>
       </table>
       </div>
@@ -4539,19 +4650,17 @@ function adminPage(user = null, opts = {}) {
   const customersSection = `
     <section class="cr-admin-card" id="customers">
       <div class="cr-admin-card-head"><h3>Customers (${stats.customers})</h3></div>
-      <table class="cr-admin-table">
-        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Orders</th></tr></thead>
+      <div class="cr-admin-scroll is-tall">
+      <table class="cr-admin-table is-wide">
+        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Registered</th><th>Verified</th><th>Orders</th><th>Total spent</th><th>First order</th><th>Last order</th><th>Latest address</th><th>Order refs</th></tr></thead>
         <tbody>
-          ${allCustomers.length ? allCustomers.map(c => `<tr><td>${escapeHtml(c.customer_name || c.email)}</td><td>${escapeHtml(c.email)}</td><td>${c.phone ? `<a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>` : "—"}</td><td>${c.orders || 0}</td></tr>`).join("") : `<tr><td colspan="4">No customers yet.</td></tr>`}
+          ${allCustomers.length ? allCustomers.map(c => `<tr><td>${escapeHtml(c.customer_name || c.email)}</td><td>${escapeHtml(c.email)}</td><td>${c.phone ? `<a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>` : "—"}</td><td>${c.registered ? "Yes" : "No"}</td><td><span class="cr-admin-badge ${c.verified ? "is-verified" : "is-unverified"}">${c.verified ? "Verified" : "Unverified"}</span></td><td>${c.orders || 0}</td><td>${currency(c.total_spent || 0)}</td><td>${c.first_order_at ? formatAdminDate(c.first_order_at, false) : "—"}</td><td>${c.last_order_at ? formatAdminDate(c.last_order_at, false) : "—"}</td><td>${escapeHtml(c.latest_address || "—")}</td><td>${escapeHtml((c.order_refs || []).slice(0, 8).join(", ") || "—")}</td></tr>`).join("") : `<tr><td colspan="11">No customers yet.</td></tr>`}
         </tbody>
       </table>
+      </div>
     </section>
   `;
 
-  const maskedPwd = (hash) => {
-    const s = String(hash || "");
-    return s ? s.slice(0, 6) + "••••••••" : "(n/a)";
-  };
   const settingsSection = `
     <section class="cr-admin-card" id="settings">
       <div class="cr-admin-card-head"><h3>Settings</h3></div>
@@ -4586,25 +4695,26 @@ function adminPage(user = null, opts = {}) {
     </section>
     <section class="cr-admin-card">
       <div class="cr-admin-card-head"><h3>User Management (${userCount})</h3></div>
-      <div style="overflow-x:auto">
-      <table class="cr-admin-table">
-        <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Mobile</th><th>Security</th><th>Verified</th><th>Orders</th><th>Actions</th></tr></thead>
+      <div class="cr-admin-scroll is-tall">
+      <table class="cr-admin-table is-wide">
+        <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Mobile</th><th>Registered</th><th>Verified</th><th>Orders</th><th>Total spent</th><th>Last order</th><th>Actions</th></tr></thead>
         <tbody>
           ${allUsers.length ? allUsers.map(u => {
-            const orders = db.prepare("SELECT order_code FROM orders WHERE email = ? ORDER BY id DESC").all(u.email);
-            const refs = orders.map(o => o.order_code).join(", ") || "—";
-            const phoneRow = db.prepare("SELECT phone FROM orders WHERE email = ? AND phone IS NOT NULL AND phone != '' ORDER BY id DESC LIMIT 1").get(u.email);
-            const phone = phoneRow && phoneRow.phone ? String(phoneRow.phone) : "";
+            const customer = customersByEmail.get(normalizeOrderEmail(u.email)) || {};
+            const refs = (customer.order_refs || []).slice(0, 8).join(", ") || "—";
+            const phone = customer.phone ? String(customer.phone) : "";
             const phoneCell = phone ? `<a href="tel:${escapeHtml(phone)}">${escapeHtml(phone)}</a>` : `<span class="cr-admin-muted">not provided</span>`;
-            const isSyntheticAdmin = String(u.email || "").toLowerCase() === String(ADMIN_SYNTHETIC_EMAIL || "").toLowerCase();
+            const isSyntheticAdmin = normalizeOrderEmail(u.email) === normalizeOrderEmail(ADMIN_SYNTHETIC_EMAIL);
             return `<tr>
               <td>${u.id}</td>
               <td>${escapeHtml(u.name)}</td>
               <td>${escapeHtml(u.email)}</td>
               <td>${phoneCell}</td>
-              <td><span class="cr-admin-muted">hashed</span><br><code>${escapeHtml(maskedPwd(u.password_hash))}</code></td>
+              <td>${u.created_at ? formatAdminDate(u.created_at, false) : "—"}</td>
               <td><span class="cr-admin-badge ${u.verified ? "is-verified" : "is-unverified"}">${u.verified ? "Verified" : "Unverified"}</span></td>
-              <td>${escapeHtml(refs)}</td>
+              <td>${escapeHtml(refs)}<br><span class="cr-admin-muted">${customer.orders || 0} orders</span></td>
+              <td>${currency(customer.total_spent || 0)}</td>
+              <td>${customer.last_order_at ? formatAdminDate(customer.last_order_at, false) : "—"}</td>
               <td>
                 <div class="cr-admin-user-actions">
                   ${u.verified ? "" : `<form method="POST" action="/admin/users/force-verify" class="cr-admin-inline-form" onsubmit="return confirm('Force verify ${escapeHtml(u.email)}?')"><input type="hidden" name="email" value="${escapeHtml(u.email)}"><button class="cr-admin-ghost" type="submit">Force verify</button></form>`}
@@ -4617,7 +4727,7 @@ function adminPage(user = null, opts = {}) {
                 </div>
               </td>
             </tr>`;
-          }).join("") : `<tr><td colspan="8">No users registered yet.</td></tr>`}
+          }).join("") : `<tr><td colspan="10">No users registered yet.</td></tr>`}
         </tbody>
       </table>
       </div>
@@ -4627,45 +4737,35 @@ function adminPage(user = null, opts = {}) {
   const contactMessagesSection = `
     <section class="cr-admin-card" id="contact-messages">
       <div class="cr-admin-card-head"><h3>Contact Messages (${(adminData.contacts || []).length})</h3></div>
-      <div style="overflow-x:auto"><table class="cr-admin-table">
+      <div class="cr-admin-scroll is-tall"><table class="cr-admin-table is-wide">
         <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Subject</th><th>Message</th><th>Date</th><th>Source</th></tr></thead>
-        <tbody>${(adminData.contacts || []).length ? adminData.contacts.map((m) => `<tr><td>${escapeHtml(m.name || "")}</td><td>${escapeHtml(m.email || "")}</td><td>${escapeHtml(m.phone || "")}</td><td>${escapeHtml(m.subject || "")}</td><td style="max-width:360px;white-space:pre-wrap">${escapeHtml(String(m.message || "").slice(0, 500))}</td><td>${new Date(m.created_at || m._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(m)}</td></tr>`).join("") : `<tr><td colspan="7">No contact messages yet.</td></tr>`}</tbody>
+        <tbody>${(adminData.contacts || []).length ? adminData.contacts.map((m) => `<tr><td>${escapeHtml(m.name || "")}</td><td>${escapeHtml(m.email || "")}</td><td>${escapeHtml(m.phone || "")}</td><td>${escapeHtml(m.subject || "")}</td><td class="cr-admin-message-cell">${escapeHtml(String(m.message || "").slice(0, 500))}</td><td>${formatAdminDate(m.created_at || m._mirroredAt)}</td><td>${sourceTag(m)}</td></tr>`).join("") : `<tr><td colspan="7">No contact messages yet.</td></tr>`}</tbody>
       </table></div>
-    </section>
-  `;
-
-  const newsletterSection = `
-    <section class="cr-admin-card" id="newsletter">
-      <div class="cr-admin-card-head"><h3>Newsletter Subscribers (${(adminData.newsletter || []).length})</h3></div>
-      <table class="cr-admin-table">
-        <thead><tr><th>Email</th><th>Signed up</th><th>Source</th></tr></thead>
-        <tbody>${(adminData.newsletter || []).length ? adminData.newsletter.map((n) => `<tr><td>${escapeHtml(n.email || "")}</td><td>${new Date(n.created_at || n._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(n)}</td></tr>`).join("") : `<tr><td colspan="3">No newsletter subscribers yet.</td></tr>`}</tbody>
-      </table>
     </section>
   `;
 
   const supportTokensSection = `
     <section class="cr-admin-card" id="support-tokens">
       <div class="cr-admin-card-head"><h3>Support Tokens (${(adminData.supportTokens || []).length})</h3></div>
-      <table class="cr-admin-table">
+      <div class="cr-admin-scroll"><table class="cr-admin-table is-compact">
         <thead><tr><th>Token</th><th>Email</th><th>Created</th><th>Source</th></tr></thead>
-        <tbody>${(adminData.supportTokens || []).length ? adminData.supportTokens.map((t) => `<tr><td><code>${escapeHtml(t.token || "")}</code></td><td>${escapeHtml(t.email || "")}</td><td>${new Date(t.created_at || t._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(t)}</td></tr>`).join("") : `<tr><td colspan="4">No support tokens yet.</td></tr>`}</tbody>
-      </table>
+        <tbody>${(adminData.supportTokens || []).length ? adminData.supportTokens.map((t) => `<tr><td><code>${escapeHtml(t.token || "")}</code></td><td>${escapeHtml(t.email || "")}</td><td>${formatAdminDate(t.created_at || t._mirroredAt)}</td><td>${sourceTag(t)}</td></tr>`).join("") : `<tr><td colspan="4">No support tokens yet.</td></tr>`}</tbody>
+      </table></div>
     </section>
   `;
 
   const emailLogsSection = `
     <section class="cr-admin-card" id="email-logs">
       <div class="cr-admin-card-head"><h3>Email Events (${(adminData.emailEvents || []).length})</h3><a href="/admin/smtp-test" target="_blank">SMTP test</a></div>
-      <div style="overflow-x:auto"><table class="cr-admin-table">
+      <div class="cr-admin-scroll is-tall"><table class="cr-admin-table is-wide">
         <thead><tr><th>Kind</th><th>Recipient</th><th>Subject</th><th>Status</th><th>Error</th><th>Ref</th><th>Date</th><th>Source</th></tr></thead>
-        <tbody>${(adminData.emailEvents || []).length ? adminData.emailEvents.map((e) => `<tr><td>${escapeHtml(e.kind || "")}</td><td>${escapeHtml(e.recipient || "")}</td><td>${escapeHtml(e.subject || "")}</td><td>${escapeHtml(e.status || "")}</td><td style="max-width:280px">${escapeHtml(e.error || "")}</td><td>${escapeHtml(e.related_ref || "")}</td><td>${new Date(e.created_at || e._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(e)}</td></tr>`).join("") : `<tr><td colspan="8">No email events yet.</td></tr>`}</tbody>
+        <tbody>${(adminData.emailEvents || []).length ? adminData.emailEvents.map((e) => `<tr><td>${escapeHtml(e.kind || "")}</td><td>${escapeHtml(e.recipient || "")}</td><td>${escapeHtml(e.subject || "")}</td><td>${escapeHtml(e.status || "")}</td><td class="cr-admin-message-cell">${escapeHtml(e.error || "")}</td><td>${escapeHtml(e.related_ref || "")}</td><td>${formatAdminDate(e.created_at || e._mirroredAt)}</td><td>${sourceTag(e)}</td></tr>`).join("") : `<tr><td colspan="8">No email events yet.</td></tr>`}</tbody>
       </table></div>
       <h4 style="margin:18px 0 8px">OTP Logs (${(adminData.otpLogs || []).length})</h4>
-      <table class="cr-admin-table">
-        <thead><tr><th>Email</th><th>Purpose</th><th>Expires</th><th>Consumed</th><th>Created</th><th>Source</th></tr></thead>
-        <tbody>${(adminData.otpLogs || []).length ? adminData.otpLogs.map((o) => `<tr><td>${escapeHtml(o.email || "")}</td><td>${escapeHtml(o.purpose || "")}</td><td>${escapeHtml(o.expires_at || "")}</td><td>${o.consumed ? "Yes" : "No"}</td><td>${new Date(o.created_at || o._mirroredAt || Date.now()).toLocaleString("en-IN")}</td><td>${sourceTag(o)}</td></tr>`).join("") : `<tr><td colspan="6">No OTP metadata yet.</td></tr>`}</tbody>
-      </table>
+      <div class="cr-admin-scroll is-tall"><table class="cr-admin-table is-wide">
+        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Registered</th><th>Verified</th><th>Orders</th><th>Purpose</th><th>Expires</th><th>Consumed</th><th>Created</th><th>Source</th></tr></thead>
+        <tbody>${(adminData.otpLogs || []).length ? adminData.otpLogs.map((o) => `<tr><td>${escapeHtml(o.user_name || "—")}</td><td>${escapeHtml(o.email || "")}</td><td>${o.phone ? `<a href="tel:${escapeHtml(o.phone)}">${escapeHtml(o.phone)}</a>` : "—"}</td><td>${o.user_registered ? "Yes" : "No"}</td><td><span class="cr-admin-badge ${o.user_verified ? "is-verified" : "is-unverified"}">${o.user_verified ? "Verified" : "Unverified"}</span></td><td>${o.order_count || 0}${o.last_order_at ? `<br><span class="cr-admin-muted">Last ${formatAdminDate(o.last_order_at, false)}</span>` : ""}</td><td>${escapeHtml(o.purpose || "")}</td><td>${escapeHtml(o.expires_at || "")}</td><td>${o.consumed ? "Yes" : "No"}</td><td>${formatAdminDate(o.created_at || o._mirroredAt)}</td><td>${sourceTag(o)}</td></tr>`).join("") : `<tr><td colspan="11">No OTP metadata yet.</td></tr>`}</tbody>
+      </table></div>
     </section>
   `;
 
@@ -4702,19 +4802,23 @@ function adminPage(user = null, opts = {}) {
 
     <section class="cr-admin-card">
       <div class="cr-admin-card-head"><h3>Recent Orders</h3><a href="/admin?section=orders">View all</a></div>
-      <table class="cr-admin-table">
-        <thead><tr><th>Order</th><th>Customer</th><th>Total</th><th>Status</th></tr></thead>
+      <div class="cr-admin-scroll"><table class="cr-admin-table is-wide">
+        <thead><tr><th>Order</th><th>Customer</th><th>Email / Phone</th><th>City / State</th><th>Items</th><th>Total</th><th>Status</th><th>Date</th></tr></thead>
         <tbody>
           ${latestOrders.length ? latestOrders.map((order) => `
             <tr>
-              <td>${escapeHtml(order.order_code)}</td>
-              <td>${escapeHtml(order.customer_name)}</td>
+              <td>${escapeHtml(order.order_code)}<br><span class="cr-admin-muted">${escapeHtml(invoiceRef(order))}</span></td>
+              <td>${escapeHtml(order.customer_name || "")}</td>
+              <td>${escapeHtml(order.email || "")}<br>${order.phone ? `<a href="tel:${escapeHtml(order.phone)}">${escapeHtml(order.phone)}</a>` : "—"}</td>
+              <td>${escapeHtml([order.city, order.state].filter(Boolean).join(", ") || "—")}</td>
+              <td>${escapeHtml(orderItemsSummary(order) || "—")}</td>
               <td>${currency(order.total)}</td>
               <td><span class="cr-admin-status">${escapeHtml(order.status)}</span></td>
+              <td>${formatAdminDate(order.created_at || order._mirroredAt, false)}</td>
             </tr>
-          `).join("") : `<tr><td colspan="4">No orders yet.</td></tr>`}
+          `).join("") : `<tr><td colspan="8">No orders yet.</td></tr>`}
         </tbody>
-      </table>
+      </table></div>
     </section>
   `;
 
@@ -4724,20 +4828,25 @@ function adminPage(user = null, opts = {}) {
       <section class="cr-admin-card">
         <div class="cr-admin-card-head"><h3>Search results for "${escapeHtml(q)}"</h3></div>
         <h4 style="margin:12px 0 6px">Orders (${searchResults.orders.length})</h4>
-        <table class="cr-admin-table">
-          <thead><tr><th>Ref</th><th>Customer</th><th>Total</th><th>Status</th></tr></thead>
-          <tbody>${searchResults.orders.map(o => `<tr><td>${escapeHtml(o.order_code)}</td><td>${escapeHtml(o.customer_name)}</td><td>${currency(o.total)}</td><td>${escapeHtml(o.status)}</td></tr>`).join("") || `<tr><td colspan="4">No matching orders.</td></tr>`}</tbody>
-        </table>
+        <div class="cr-admin-scroll"><table class="cr-admin-table is-wide">
+          <thead><tr><th>Ref</th><th>Customer</th><th>Email</th><th>Total</th><th>Status</th></tr></thead>
+          <tbody>${searchResults.orders.map(o => `<tr><td>${escapeHtml(o.order_code)}</td><td>${escapeHtml(o.customer_name)}</td><td>${escapeHtml(o.email || "")}</td><td>${currency(o.total)}</td><td>${escapeHtml(o.status)}</td></tr>`).join("") || `<tr><td colspan="5">No matching orders.</td></tr>`}</tbody>
+        </table></div>
+        <h4 style="margin:18px 0 6px">Customers (${(searchResults.customers || []).length})</h4>
+        <div class="cr-admin-scroll"><table class="cr-admin-table is-compact">
+          <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Orders</th><th>Total spent</th></tr></thead>
+          <tbody>${(searchResults.customers || []).map(c => `<tr><td>${escapeHtml(c.customer_name || "")}</td><td>${escapeHtml(c.email || "")}</td><td>${escapeHtml(c.phone || "")}</td><td>${c.orders || 0}</td><td>${currency(c.total_spent || 0)}</td></tr>`).join("") || `<tr><td colspan="5">No matching customers.</td></tr>`}</tbody>
+        </table></div>
         <h4 style="margin:18px 0 6px">Products (${searchResults.products.length})</h4>
-        <table class="cr-admin-table">
+        <div class="cr-admin-scroll"><table class="cr-admin-table is-compact">
           <thead><tr><th>Name</th><th>Brand</th><th>Price</th><th>Stock</th></tr></thead>
           <tbody>${searchResults.products.map(p => `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.brand)}</td><td>${currency(p.price)}</td><td>${p.stock}</td></tr>`).join("") || `<tr><td colspan="4">No matching products.</td></tr>`}</tbody>
-        </table>
+        </table></div>
         <h4 style="margin:18px 0 6px">Contact Messages (${(searchResults.contacts || []).length})</h4>
-        <table class="cr-admin-table">
+        <div class="cr-admin-scroll"><table class="cr-admin-table is-compact">
           <thead><tr><th>Name</th><th>Email</th><th>Subject</th><th>Message</th></tr></thead>
           <tbody>${(searchResults.contacts || []).map(c => `<tr><td>${escapeHtml(c.name || "")}</td><td>${escapeHtml(c.email || "")}</td><td>${escapeHtml(c.subject || "")}</td><td>${escapeHtml(String(c.message || "").slice(0, 220))}</td></tr>`).join("") || `<tr><td colspan="4">No matching contact messages.</td></tr>`}</tbody>
-        </table>
+        </table></div>
       </section>
     `;
   } else if (section === "products") {
@@ -4750,8 +4859,6 @@ function adminPage(user = null, opts = {}) {
     mainBody = settingsSection;
   } else if (section === "contact-messages") {
     mainBody = contactMessagesSection;
-  } else if (section === "newsletter") {
-    mainBody = newsletterSection;
   } else if (section === "support-tokens") {
     mainBody = supportTokensSection;
   } else if (section === "email-logs") {
@@ -4771,8 +4878,8 @@ function adminPage(user = null, opts = {}) {
     mainBody = `
       <section class="cr-admin-card" id="reviews">
         <div class="cr-admin-card-head"><h3>Product Reviews (${allReviews.length})</h3></div>
-        <div style="overflow-x:auto">
-        <table class="cr-admin-table">
+        <div class="cr-admin-scroll is-tall">
+        <table class="cr-admin-table is-wide">
           <thead><tr><th>Product</th><th>Reviewer</th><th>Rating</th><th>Title</th><th>Body</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>
             ${allReviews.length ? allReviews.map(r => `
@@ -4819,7 +4926,6 @@ function adminPage(user = null, opts = {}) {
             ${navItem("/admin?section=customers", "Customers", "customers")}
             ${navItem("/admin?section=reviews", "Reviews", "reviews")}
             ${navItem("/admin?section=contact-messages", "Contact", "contact-messages")}
-            ${navItem("/admin?section=newsletter", "Newsletter", "newsletter")}
             ${navItem("/admin?section=support-tokens", "Support Tokens", "support-tokens")}
             ${navItem("/admin?section=email-logs", "Email / OTP Logs", "email-logs")}
             ${navItem("/admin?section=diagnostics", "Diagnostics", "diagnostics")}
@@ -6214,7 +6320,15 @@ async function handleRequest(req, res) {
       json(res, 404, { error: "Order not found" });
       return;
     }
-    json(res, 200, { ...order, items: JSON.parse(order.items_json) });
+    if (!currentUser) {
+      json(res, 401, { error: "Please log in to view this invoice" });
+      return;
+    }
+    if (!canViewOrderDetails(currentUser, order)) {
+      json(res, 403, { error: "You can only view your own invoices" });
+      return;
+    }
+    json(res, 200, { ...order, items: orderItems(order) });
     return;
   }
 

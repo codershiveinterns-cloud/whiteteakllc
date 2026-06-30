@@ -785,6 +785,12 @@
       if (sb) sb.classList.toggle("is-open");
     });
   });
+  document.querySelectorAll("[data-cr-admin-sidebar] a").forEach(function (link) {
+    link.addEventListener("click", function () {
+      var sb = document.querySelector("[data-cr-admin-sidebar]");
+      if (sb) sb.classList.remove("is-open");
+    });
+  });
 
   // Color swatch toggle (decorative)
   document.querySelectorAll(".cr-swatch").forEach(function (sw) {
