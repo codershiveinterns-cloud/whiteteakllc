@@ -6309,6 +6309,11 @@ async function handleRequest(req, res) {
       res.end();
       return;
     }
+    if (!Number(user.verified || 0)) {
+      res.writeHead(302, { Location: `/auth?message=${encodeURIComponent("Please verify your account with OTP before logging in. If OTP is not working, ask admin for manual approval.")}&email=${encodeURIComponent(email)}${nextQS}` });
+      res.end();
+      return;
+    }
     setAuthCookie(res, { email, name: user.name, role: "user" });
     try {
       const session = await dataLayer.createSession(email);
