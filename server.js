@@ -4695,6 +4695,7 @@ function adminPage(user = null, opts = {}) {
     </section>
     <section class="cr-admin-card">
       <div class="cr-admin-card-head"><h3>User Management (${userCount})</h3></div>
+      <p class="cr-admin-muted">Use “Manual approve / OTP bypass” when a registered user cannot receive or enter an OTP. Approval marks the account verified so the user can login with email and password only.</p>
       <div class="cr-admin-scroll is-tall">
       <table class="cr-admin-table is-wide">
         <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Mobile</th><th>Registered</th><th>Verified</th><th>Orders</th><th>Total spent</th><th>Last order</th><th>Actions</th></tr></thead>
@@ -4717,7 +4718,7 @@ function adminPage(user = null, opts = {}) {
               <td>${customer.last_order_at ? formatAdminDate(customer.last_order_at, false) : "—"}</td>
               <td>
                 <div class="cr-admin-user-actions">
-                  ${u.verified ? "" : `<form method="POST" action="/admin/users/force-verify" class="cr-admin-inline-form" onsubmit="return confirm('Force verify ${escapeHtml(u.email)}?')"><input type="hidden" name="email" value="${escapeHtml(u.email)}"><button class="cr-admin-ghost" type="submit">Force verify</button></form>`}
+                  ${u.verified ? `<span class="cr-admin-muted">Already approved for password login</span>` : `<form method="POST" action="/admin/users/force-verify" class="cr-admin-inline-form" onsubmit="return confirm('Manually approve ${escapeHtml(u.email)} for login without OTP?')"><input type="hidden" name="email" value="${escapeHtml(u.email)}"><button class="cr-admin-ghost" type="submit">Manual approve / OTP bypass</button></form>`}
                   <form method="POST" action="/admin/users/reset-password" class="cr-admin-inline-form" onsubmit="return confirm('Reset password for ${escapeHtml(u.email)}?')">
                     <input type="hidden" name="email" value="${escapeHtml(u.email)}">
                     <input class="cr-admin-mini-input" type="password" name="password" minlength="6" placeholder="New password" ${isSyntheticAdmin ? "disabled" : "required"}>
@@ -6054,7 +6055,8 @@ async function handleRequest(req, res) {
     const target = await dataLayer.getUserByEmail(email);
     if (!target) { back("User not found.", true); return; }
     await dataLayer.markUserVerified(email);
-    back(`Verified ${email}.`);
+    try { db.prepare("UPDATE otp_codes SET consumed = 1 WHERE email = ? AND consumed = 0").run(email); saveDbSafe("admin-manual-verify"); } catch (_) { /* OTP cleanup is best-effort */ }
+    back(`Manually approved ${email}. They can now login without OTP.`);
     return;
   }
 
@@ -6555,6 +6557,17 @@ async function handleRequest(req, res) {
     } else {
       if (!user || !verifyPassword(password, user.password_hash)) {
         res.writeHead(302, { Location: `/auth?message=${encodeURIComponent("Invalid email or password.")}&email=${encodeURIComponent(email)}` });
+        res.end();
+        return;
+      }
+      if (Number(user.verified || 0)) {
+        setAuthCookie(res, { email, name: user.name || email, role: "user" });
+        try {
+          const session = await dataLayer.createSession(email);
+          if (session) setSessionCookie(res, session.token, session.expiresAt);
+        } catch { /* signed cookie is sufficient */ }
+        const hasAddr = Boolean((parseCookies(req) || {}).mp_addr);
+        res.writeHead(302, { Location: hasAddr ? "/account" : "/account?prompt_addr=1" });
         res.end();
         return;
       }
