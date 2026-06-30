@@ -3873,7 +3873,23 @@ function checkoutPage(user = null) {
   });
 }
 
-function trackPage(prefill = "", user = null) {
+async function getTrackOrder(orderCode) {
+  const code = String(orderCode || "").trim();
+  if (!code) return null;
+  const local = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(code);
+  if (local) return { ...local, _source: "SQLite" };
+  if (fbMirror && fbMirror.isEnabled && fbMirror.isEnabled() && fbMirror.getFirestore) {
+    try {
+      const snap = await fbMirror.getFirestore().collection("orders").doc(code).get();
+      if (snap.exists) return { ...snap.data(), order_code: snap.data().order_code || code, _source: "Firestore" };
+    } catch (error) {
+      console.warn("[track] Firestore order lookup failed:", error.message);
+    }
+  }
+  return null;
+}
+
+async function trackPage(prefill = "", user = null) {
   return layout({
     title: "Track Order | WHITETEAKLLC",
     currentPath: "/track",
@@ -3891,29 +3907,30 @@ function trackPage(prefill = "", user = null) {
             <input type="text" name="orderId" value="${escapeHtml(prefill)}" placeholder="Enter order code like ORD-1001">
             <button class="primary-button" type="submit">Track order</button>
           </form>
-          ${prefill ? renderTrackResult(prefill) : `<div class="empty-panel">Enter an order ID to view delivery status and purchased items.</div>`}
+          ${prefill ? await renderTrackResult(prefill) : `<div class="empty-panel">Enter an order ID to view delivery status and purchased items.</div>`}
         </section>
       </main>
     `
   });
 }
 
-function renderTrackResult(orderCode) {
-  const order = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode);
+async function renderTrackResult(orderCode) {
+  const order = await getTrackOrder(orderCode);
   if (!order) {
     return `<div class="empty-panel danger-panel">No order found for ${escapeHtml(orderCode)}.</div>`;
   }
 
-  const items = JSON.parse(order.items_json);
+  const items = orderItems(order);
   return `
     <article class="track-card">
       <div class="summary-line"><span>Order ID</span><strong>${escapeHtml(order.order_code)}</strong></div>
-      <div class="summary-line"><span>Status</span><strong>${escapeHtml(order.status)}</strong></div>
-      <div class="summary-line"><span>Customer</span><strong>${escapeHtml(order.customer_name)}</strong></div>
-      <div class="summary-line"><span>Total</span><strong>${currency(order.total)}</strong></div>
+      <div class="summary-line"><span>Status</span><strong>${escapeHtml(order.status || "Processing")}</strong></div>
+      <div class="summary-line"><span>Placed</span><strong>${formatAdminDate(order.created_at || order._mirroredAt, false)}</strong></div>
+      <div class="summary-line"><span>Total</span><strong>${currency(order.total || 0)}</strong></div>
       <div class="order-items-list">
-        ${items.map((item) => `<div>${escapeHtml(item.name)} × ${item.quantity}</div>`).join("")}
+        ${items.length ? items.map((item) => `<div>${escapeHtml(item.name || "Item")} × ${item.quantity || 1}</div>`).join("") : `<div>Items are being prepared.</div>`}
       </div>
+      <p class="subtle" style="margin-top:12px">For privacy, full invoice, phone, email, and address details are available only after login.</p>
     </article>
   `;
 }
@@ -5854,7 +5871,7 @@ async function handleRequest(req, res) {
   }
 
   if (req.method === "GET" && pathname === "/track") {
-    html(res, 200, trackPage(url.searchParams.get("orderId") || "", currentUser));
+    html(res, 200, await trackPage(url.searchParams.get("orderId") || "", currentUser));
     return;
   }
 
