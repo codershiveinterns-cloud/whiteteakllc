@@ -2365,6 +2365,13 @@ body[class*="theme-"] .cr-footer .cr-footer-social a:hover {
 .cr-admin-detail-list { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 6px; min-width: 260px; }
 .cr-admin-detail-list li span { display: block; color: var(--text-muted); font-size: 12px; }
 .cr-admin-message-cell { max-width: 360px; white-space: pre-wrap; word-break: break-word; }
+@media (min-width: 1280px) and (min-height: 720px) {
+  .cr-admin-scroll.is-tall { max-height: none; overflow-y: visible; }
+  .cr-admin-table.is-wide { min-width: 100%; }
+}
+@media (max-width: 1279px), (max-height: 719px) {
+  .cr-admin-scroll.is-tall { max-height: 70vh; overflow-y: auto; }
+}
 .cr-admin-table th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
 .cr-admin-table tbody tr { transition: background .15s ease, transform .15s ease; }
 .cr-admin-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
