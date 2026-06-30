@@ -162,6 +162,10 @@ async function listOrders(opts = {}) {
   return listCollection("orders", { ...opts, orderBy: "created_at" });
 }
 
+function listAuthUsers(opts = {}) {
+  return listCollection("auth_users", { ...opts, orderBy: "created_at" });
+}
+
 async function listContactMessages(opts = {}) {
   return listCollection("contact_messages", { ...opts, orderBy: "created_at" });
 }
@@ -200,6 +204,7 @@ module.exports = {
   mirrorSupportToken,
   mirrorEmailEvent,
   listOrders,
+  listAuthUsers,
   listContactMessages,
   listNewsletterSubscribers,
   listOtpLogs,

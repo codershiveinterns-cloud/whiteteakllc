@@ -3874,9 +3874,9 @@ function checkoutPage(user = null) {
 }
 
 async function getTrackOrder(orderCode) {
-  const code = String(orderCode || "").trim();
+  const code = String(orderCode || "").trim().toUpperCase();
   if (!code) return null;
-  const local = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(code);
+  const local = db.prepare("SELECT * FROM orders WHERE UPPER(order_code) = ?").get(code);
   if (local) return { ...local, _source: "SQLite" };
   if (fbMirror && fbMirror.isEnabled && fbMirror.isEnabled() && fbMirror.getFirestore) {
     try {
@@ -4413,23 +4413,44 @@ async function getAdminData({ q = "" } = {}) {
     catch { return []; }
   })();
 
-  const [fbOrders, fbContacts, fbOtpLogs, fbEmailEvents, fbSupportTokens] = fbMirror ? await Promise.all([
+  const [fbOrders, fbContacts, fbOtpLogs, fbEmailEvents, fbSupportTokens, fbAuthUsers] = fbMirror ? await Promise.all([
     fbMirror.listOrders ? fbMirror.listOrders({ limit: 500 }) : [],
     fbMirror.listContactMessages ? fbMirror.listContactMessages({ limit: 500 }) : [],
     fbMirror.listOtpLogs ? fbMirror.listOtpLogs({ limit: 500 }) : [],
     fbMirror.listEmailEvents ? fbMirror.listEmailEvents({ limit: 500 }) : [],
-    fbMirror.listSupportTokens ? fbMirror.listSupportTokens({ limit: 250 }) : []
-  ]) : [[], [], [], [], []];
+    fbMirror.listSupportTokens ? fbMirror.listSupportTokens({ limit: 250 }) : [],
+    fbMirror.listAuthUsers ? fbMirror.listAuthUsers({ limit: 1000 }) : []
+  ]) : [[], [], [], [], [], []];
 
   const orders = mergeByKey(localOrders, fbOrders, (row) => row.order_code);
   const contacts = mergeByKey(localContacts, fbContacts, (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.subject || ""}`);
   const supportTokens = mergeByKey(localSupportTokens, fbSupportTokens, (row) => row.token || `${row.created_at}:${row.email}`);
   const otpLogsRaw = mergeByKey(localOtpLogs, fbOtpLogs, (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.purpose || ""}`);
   const emailEvents = mergeByKey(localEmailEvents, fbEmailEvents, (row) => `${row.created_at || row._mirroredAt || ""}:${row.recipient || ""}:${row.subject || ""}`);
-  const usersByEmail = new Map(localUsers.map((u) => [normalizeOrderEmail(u.email), u]));
+  const usersByEmail = new Map();
+  for (const user of localUsers) {
+    const email = normalizeOrderEmail(user.email);
+    if (email) usersByEmail.set(email, { ...user, email });
+  }
+  for (const user of fbAuthUsers || []) {
+    const email = normalizeOrderEmail(user.email);
+    if (!email) continue;
+    const existing = usersByEmail.get(email) || {};
+    usersByEmail.set(email, {
+      ...existing,
+      ...user,
+      id: existing.id || user.id || email,
+      email,
+      name: existing.name || user.name || email,
+      verified: Number(existing.verified || 0) || Number(user.verified || 0),
+      created_at: existing.created_at || user.created_at || user._mirroredAt || "",
+      _source: existing._source && user._source ? `${existing._source} + ${user._source}` : (existing._source || user._source || "")
+    });
+  }
+  const allUsersMerged = Array.from(usersByEmail.values()).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   const customersMap = new Map();
 
-  for (const user of localUsers) {
+  for (const user of allUsersMerged) {
     const email = normalizeOrderEmail(user.email);
     if (!email) continue;
     customersMap.set(email, { email, customer_name: user.name || email, phone: "", orders: 0, total_spent: 0, registered: true, verified: Number(user.verified || 0), registered_at: user.created_at || "", first_order_at: "", last_order_at: "", latest_address: "", city: "", state: "", pincode: "", order_refs: [] });
@@ -4482,7 +4503,7 @@ async function getAdminData({ q = "" } = {}) {
     contacts: contacts.filter((c) => [c.name, c.email, c.phone, c.subject, c.message].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25),
     customers: customers.filter((c) => [c.customer_name, c.email, c.phone, c.latest_address, c.order_refs.join(" ")].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25)
   } : null;
-  return { orders, contacts, supportTokens, otpLogs, emailEvents, users: localUsers, customers, searchResults };
+  return { orders, contacts, supportTokens, otpLogs, emailEvents, users: allUsersMerged, customers, searchResults };
 }
 
 function adminPage(user = null, opts = {}) {
@@ -4710,8 +4731,8 @@ function adminPage(user = null, opts = {}) {
         <button class="cr-admin-danger" type="submit">Logout</button>
       </form>
     </section>
-    <section class="cr-admin-card">
-      <div class="cr-admin-card-head"><h3>User Management (${userCount})</h3></div>
+    <section class="cr-admin-card" id="users">
+      <div class="cr-admin-card-head"><h3>Manual Verification & User Management (${userCount})</h3></div>
       <p class="cr-admin-muted">Use “Manual approve / OTP bypass” when a registered user cannot receive or enter an OTP. Approval marks the account verified so the user can login with email and password only.</p>
       <div class="cr-admin-scroll is-tall">
       <table class="cr-admin-table is-wide">
@@ -4873,7 +4894,7 @@ function adminPage(user = null, opts = {}) {
     mainBody = ordersSection;
   } else if (section === "customers") {
     mainBody = customersSection;
-  } else if (section === "settings") {
+  } else if (section === "settings" || section === "users") {
     mainBody = settingsSection;
   } else if (section === "contact-messages") {
     mainBody = contactMessagesSection;
@@ -4942,6 +4963,7 @@ function adminPage(user = null, opts = {}) {
             ${navItem("/admin?section=products", "Products", "products")}
             ${navItem("/admin?section=orders", "Orders", "orders")}
             ${navItem("/admin?section=customers", "Customers", "customers")}
+            ${navItem("/admin?section=users#users", "Manual Verify", "users")}
             ${navItem("/admin?section=reviews", "Reviews", "reviews")}
             ${navItem("/admin?section=contact-messages", "Contact", "contact-messages")}
             ${navItem("/admin?section=support-tokens", "Support Tokens", "support-tokens")}
