@@ -4391,13 +4391,26 @@ function invoiceRef(order) {
   return order && order.order_code ? `INV-${order.order_code}` : "—";
 }
 
+function mergeFilledRows(existing, incoming) {
+  const merged = { ...(existing || {}) };
+  for (const [key, value] of Object.entries(incoming || {})) {
+    const current = merged[key];
+    const hasIncoming = value !== undefined && value !== null && value !== "";
+    const hasCurrent = current !== undefined && current !== null && current !== "";
+    if (hasIncoming && (!hasCurrent || key === "_source")) {
+      merged[key] = key === "_source" && hasCurrent && current !== value ? `${current} + ${value}` : value;
+    }
+  }
+  return merged;
+}
+
 function mergeByKey(primary, secondary, keyFn) {
   const map = new Map();
   for (const row of [...primary, ...secondary]) {
     const key = keyFn(row);
     if (!key) continue;
     if (!map.has(key)) map.set(key, row);
-    else map.set(key, { ...row, ...map.get(key) });
+    else map.set(key, mergeFilledRows(map.get(key), row));
   }
   return Array.from(map.values()).sort((a, b) => new Date(b.created_at || b._mirroredAt || 0) - new Date(a.created_at || a._mirroredAt || 0));
 }
@@ -4480,11 +4493,17 @@ async function getAdminData({ q = "" } = {}) {
   for (const contact of contacts) {
     const email = normalizeOrderEmail(contact.email);
     if (!email) continue;
-    const existing = customersMap.get(email);
-    if (existing) {
-      if (!existing.phone && contact.phone) existing.phone = contact.phone;
-      if ((!existing.customer_name || existing.customer_name === email) && contact.name) existing.customer_name = contact.name;
+    const existing = customersMap.get(email) || { email, customer_name: contact.name || email, phone: "", orders: 0, total_spent: 0, registered: false, verified: 0, registered_at: "", first_order_at: "", last_order_at: "", latest_address: "", city: "", state: "", pincode: "", order_refs: [] };
+    if (!existing.phone && contact.phone) existing.phone = contact.phone;
+    if ((!existing.customer_name || existing.customer_name === email) && contact.name) existing.customer_name = contact.name;
+    const contactDate = contact.created_at || contact._mirroredAt || "";
+    if (!existing.last_contact_at || (contactDate && new Date(contactDate) > new Date(existing.last_contact_at))) {
+      existing.last_contact_at = contactDate;
+      existing.last_contact_subject = contact.subject || "";
+      existing.last_contact_message = contact.message || "";
+      existing.last_contact_source = contact._source || "";
     }
+    customersMap.set(email, existing);
   }
 
   const customers = Array.from(customersMap.values()).sort((a, b) => new Date(b.last_order_at || b.registered_at || 0) - new Date(a.last_order_at || a.registered_at || 0));
@@ -4690,9 +4709,9 @@ function adminPage(user = null, opts = {}) {
       <div class="cr-admin-card-head"><h3>Customers (${stats.customers})</h3></div>
       <div class="cr-admin-scroll is-tall">
       <table class="cr-admin-table is-wide">
-        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Registered</th><th>Verified</th><th>Orders</th><th>Total spent</th><th>First order</th><th>Last order</th><th>Latest address</th><th>Order refs</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Registered</th><th>Verified</th><th>Orders</th><th>Total spent</th><th>First order</th><th>Last order</th><th>Latest address</th><th>Last contact</th><th>All details</th></tr></thead>
         <tbody>
-          ${allCustomers.length ? allCustomers.map(c => `<tr><td>${escapeHtml(c.customer_name || c.email)}</td><td>${escapeHtml(c.email)}</td><td>${c.phone ? `<a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>` : "—"}</td><td>${c.registered ? "Yes" : "No"}</td><td><span class="cr-admin-badge ${c.verified ? "is-verified" : "is-unverified"}">${c.verified ? "Verified" : "Unverified"}</span></td><td>${c.orders || 0}</td><td>${currency(c.total_spent || 0)}</td><td>${c.first_order_at ? formatAdminDate(c.first_order_at, false) : "—"}</td><td>${c.last_order_at ? formatAdminDate(c.last_order_at, false) : "—"}</td><td>${escapeHtml(c.latest_address || "—")}</td><td>${escapeHtml((c.order_refs || []).slice(0, 8).join(", ") || "—")}</td></tr>`).join("") : `<tr><td colspan="11">No customers yet.</td></tr>`}
+          ${allCustomers.length ? allCustomers.map(c => `<tr><td>${escapeHtml(c.customer_name || c.email)}</td><td>${escapeHtml(c.email)}</td><td>${c.phone ? `<a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>` : "—"}</td><td>${c.registered ? `Yes<br><span class="cr-admin-muted">${c.registered_at ? formatAdminDate(c.registered_at, false) : ""}</span>` : "No"}</td><td><span class="cr-admin-badge ${c.verified ? "is-verified" : "is-unverified"}">${c.verified ? "Verified" : "Unverified"}</span></td><td>${c.orders || 0}<br><span class="cr-admin-muted">${escapeHtml((c.order_refs || []).slice(0, 4).join(", ") || "No orders")}</span></td><td>${currency(c.total_spent || 0)}</td><td>${c.first_order_at ? formatAdminDate(c.first_order_at, false) : "—"}</td><td>${c.last_order_at ? formatAdminDate(c.last_order_at, false) : "—"}</td><td>${escapeHtml(c.latest_address || "—")}</td><td>${c.last_contact_at ? `${escapeHtml(c.last_contact_subject || "Contact")}<br><span class="cr-admin-muted">${formatAdminDate(c.last_contact_at, false)}</span>` : "—"}</td><td><details class="cr-admin-details"><summary>View</summary><div><strong>Name:</strong> ${escapeHtml(c.customer_name || "—")}</div><div><strong>Email:</strong> ${escapeHtml(c.email || "—")}</div><div><strong>Phone:</strong> ${escapeHtml(c.phone || "—")}</div><div><strong>Registered:</strong> ${c.registered ? "Yes" : "No"}</div><div><strong>Verified:</strong> ${c.verified ? "Yes" : "No"}</div><div><strong>Total spent:</strong> ${currency(c.total_spent || 0)}</div><div><strong>Address:</strong> ${escapeHtml(c.latest_address || "—")}</div><div><strong>City/state/pincode:</strong> ${escapeHtml([c.city, c.state, c.pincode].filter(Boolean).join(", ") || "—")}</div><div><strong>Order refs:</strong> ${escapeHtml((c.order_refs || []).join(", ") || "—")}</div><div><strong>Last contact:</strong> ${escapeHtml(c.last_contact_subject || "—")}${c.last_contact_message ? `<br><span class="cr-admin-muted">${escapeHtml(String(c.last_contact_message).slice(0, 300))}</span>` : ""}</div></details></td></tr>`).join("") : `<tr><td colspan="12">No customers yet.</td></tr>`}
         </tbody>
       </table>
       </div>
