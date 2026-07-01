@@ -1316,6 +1316,7 @@
     var paypalLoading = null;
     var mobilePayPalMq = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
     var paypalResizeTimer = null;
+    var paypalRenderTimer = null;
     function setStatus(t, err) {
       [statusEl, checkoutMessage].forEach(function (node) {
         if (!node) return;
@@ -1352,13 +1353,25 @@
       paypalButton.innerHTML = "";
       paypalRendered = false;
     }
+    function isReviewStepActive() {
+      var active = shell.querySelector(".cr-co-step.is-active");
+      return !!(active && active.getAttribute("data-step-body") === "3");
+    }
+    function schedulePayPalRender() {
+      clearTimeout(paypalRenderTimer);
+      paypalRenderTimer = setTimeout(function () {
+        if (!isReviewStepActive() || getPayVal() !== "paypal" || !paypalReady || !paypalWrap) return;
+        paypalWrap.hidden = false;
+        renderPayPalButtons();
+      }, isMobileCheckout() ? 120 : 0);
+    }
     function togglePaymentUi() {
       var payVal = getPayVal();
       if (wise) wise.hidden = payVal !== "wise";
       var usePayPal = payVal === "paypal" && paypalReady;
       if (paypalWrap) paypalWrap.hidden = !usePayPal;
       if (submitButton) submitButton.hidden = usePayPal;
-      if (usePayPal && (!isMobileCheckout() || isVisible(paypalWrap))) renderPayPalButtons();
+      if (usePayPal) schedulePayPalRender();
     }
     function loadPayPalSdk() {
       if (window.paypal) return Promise.resolve();

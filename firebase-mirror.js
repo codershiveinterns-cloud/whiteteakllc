@@ -162,6 +162,18 @@ async function listOrders(opts = {}) {
   return listCollection("orders", { ...opts, orderBy: "created_at" });
 }
 
+async function getOrder(orderCode) {
+  if (!orderCode || !isEnabled()) return null;
+  try {
+    const doc = await firestore.collection("orders").doc(String(orderCode)).get();
+    if (!doc.exists) return null;
+    return { id: doc.id, ...doc.data(), _source: "Firestore" };
+  } catch (e) {
+    console.warn(`[firebase] get order ${orderCode} failed:`, e.message);
+    return null;
+  }
+}
+
 function listAuthUsers(opts = {}) {
   return listCollection("auth_users", { ...opts, orderBy: "created_at" });
 }
@@ -204,6 +216,7 @@ module.exports = {
   mirrorSupportToken,
   mirrorEmailEvent,
   listOrders,
+  getOrder,
   listAuthUsers,
   listContactMessages,
   listNewsletterSubscribers,

@@ -1638,6 +1638,32 @@ function getOrdersByEmail(email) {
   return db.prepare("SELECT * FROM orders WHERE email = ? ORDER BY id DESC").all(normalizeOrderEmail(email));
 }
 
+function getLocalOrderByCode(orderCode) {
+  return db.prepare("SELECT * FROM orders WHERE order_code = ?").get(String(orderCode || "").trim());
+}
+
+async function getOrderByCode(orderCode) {
+  const code = String(orderCode || "").trim();
+  if (!code) return null;
+  const local = getLocalOrderByCode(code);
+  if (local) return { ...local, _source: local._source || "SQLite" };
+  if (fbMirror && fbMirror.getOrder) {
+    try {
+      const remote = await fbMirror.getOrder(code);
+      if (remote) return remote;
+    } catch { /* fall through */ }
+  }
+  return null;
+}
+
+async function getOrdersByEmailMerged(email, { limit = 1000 } = {}) {
+  const normalized = normalizeOrderEmail(email);
+  const localOrders = getOrdersByEmail(normalized).map((row) => ({ ...row, _source: "SQLite" }));
+  const fbOrders = fbMirror && fbMirror.listOrders ? await fbMirror.listOrders({ limit }) : [];
+  const matchingFbOrders = (fbOrders || []).filter((row) => normalizeOrderEmail(row.email) === normalized);
+  return mergeByKey(localOrders, matchingFbOrders, (row) => row.order_code);
+}
+
 function userOwnsOrder(user, order) {
   return Boolean(user && order && normalizeOrderEmail(user.email) === normalizeOrderEmail(order.email));
 }
@@ -4218,8 +4244,8 @@ function adminLoginPage({ error = "" } = {}) {
   });
 }
 
-function accountPage(user) {
-  const orders = getOrdersByEmail(user.email);
+function accountPage(user, opts = {}) {
+  const orders = opts.orders || getOrdersByEmail(user.email);
   const memberSince = (() => {
     try {
       const row = db.prepare("SELECT created_at FROM users WHERE email = ?").get(user.email);
@@ -4338,6 +4364,9 @@ function accountPage(user) {
 }
 
 const ORDER_STATUS_OPTIONS = [
+  "Pending",
+  "Paid",
+  "Awaiting payment confirmation",
   "Pending Pickup",
   "Collection Scan",
   "Out for Delivery",
@@ -4427,7 +4456,7 @@ async function getAdminData({ q = "" } = {}) {
   })();
 
   const [fbOrders, fbContacts, fbOtpLogs, fbEmailEvents, fbSupportTokens, fbAuthUsers] = fbMirror ? await Promise.all([
-    fbMirror.listOrders ? fbMirror.listOrders({ limit: 500 }) : [],
+    fbMirror.listOrders ? fbMirror.listOrders({ limit: 1000 }) : [],
     fbMirror.listContactMessages ? fbMirror.listContactMessages({ limit: 500 }) : [],
     fbMirror.listOtpLogs ? fbMirror.listOtpLogs({ limit: 500 }) : [],
     fbMirror.listEmailEvents ? fbMirror.listEmailEvents({ limit: 500 }) : [],
@@ -4435,7 +4464,7 @@ async function getAdminData({ q = "" } = {}) {
     fbMirror.listAuthUsers ? fbMirror.listAuthUsers({ limit: 1000 }) : []
   ]) : [[], [], [], [], [], []];
 
-  const orders = mergeByKey(localOrders, fbOrders, (row) => row.order_code);
+  const orders = mergeByKey(localOrders, fbOrders || [], (row) => row.order_code);
   const contacts = mergeByKey(localContacts, fbContacts, (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.subject || ""}`);
   const supportTokens = mergeByKey(localSupportTokens, fbSupportTokens, (row) => row.token || `${row.created_at}:${row.email}`);
   const otpLogsRaw = mergeByKey(localOtpLogs, fbOtpLogs, (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.purpose || ""}`);
@@ -6090,8 +6119,8 @@ async function handleRequest(req, res) {
     const orderCode = String(body.orderCode || "").trim();
     const status = String(body.status || "").trim();
     if (orderCode && ORDER_STATUS_OPTIONS.includes(status)) {
-      db.prepare("UPDATE orders SET status = ? WHERE order_code = ?").run(status, orderCode);
-      saveDbSafe("order-status");
+      const result = db.prepare("UPDATE orders SET status = ? WHERE order_code = ?").run(status, orderCode);
+      if (result.changes) saveDbSafe("order-status");
       if (fbMirror && fbMirror.updateOrderStatus) { try { await fbMirror.updateOrderStatus(orderCode, status); } catch (_) {} }
     }
     res.writeHead(302, { Location: "/admin?section=orders" });
@@ -6374,13 +6403,14 @@ async function handleRequest(req, res) {
       res.end();
       return;
     }
-    html(res, 200, accountPage(currentUser));
+    const orders = await getOrdersByEmailMerged(currentUser.email);
+    html(res, 200, accountPage(currentUser, { orders }));
     return;
   }
 
   if (req.method === "GET" && pathname.startsWith("/api/orders/")) {
     const orderCode = pathname.split("/").pop();
-    const order = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode);
+    const order = await getOrderByCode(orderCode);
     if (!order) {
       json(res, 404, { error: "Order not found" });
       return;
