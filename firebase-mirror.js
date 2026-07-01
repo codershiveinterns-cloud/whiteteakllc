@@ -178,6 +178,10 @@ function listAuthUsers(opts = {}) {
   return listCollection("auth_users", { ...opts, orderBy: "created_at" });
 }
 
+async function listUsers(opts = {}) {
+  return listCollection("users", { ...opts, orderBy: "created_at" });
+}
+
 async function listContactMessages(opts = {}) {
   return listCollection("contact_messages", { ...opts, orderBy: "created_at" });
 }
@@ -218,6 +222,7 @@ module.exports = {
   listOrders,
   getOrder,
   listAuthUsers,
+  listUsers,
   listContactMessages,
   listNewsletterSubscribers,
   listOtpLogs,

@@ -165,6 +165,7 @@ ensureProductColumn("images_json", "TEXT NOT NULL DEFAULT '[]'");
 try { db.exec("ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'COD'"); } catch (_e) { /* exists */ }
 try { db.exec("ALTER TABLE orders ADD COLUMN paypal_order_id TEXT"); } catch (_e) { /* exists */ }
 try { db.exec("ALTER TABLE orders ADD COLUMN paypal_capture_id TEXT"); } catch (_e) { /* exists */ }
+try { db.exec("ALTER TABLE orders ADD COLUMN account_email TEXT"); } catch (_e) { /* exists */ }
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS product_reviews (
@@ -956,7 +957,7 @@ function computeOrderTotal(items) {
 }
 
 function createOrderCode() {
-  return `ORD-${1000 + Number(db.prepare("SELECT COUNT(*) AS count FROM orders").get().count) + 1}`;
+  return `ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 }
 
 function saveDbSafe(scope = "db") {
@@ -964,6 +965,17 @@ function saveDbSafe(scope = "db") {
     if (db && typeof db.save === "function") db.save();
   } catch (error) {
     console.warn(`[${scope}] db save failed:`, error.message);
+  }
+}
+
+function saveDbStrict(scope = "db") {
+  if (!db) return;
+  try {
+    if (typeof db.saveStrict === "function") db.saveStrict();
+    else if (typeof db.save === "function") db.save();
+  } catch (error) {
+    console.warn(`[${scope}] db save failed:`, error.message);
+    throw error;
   }
 }
 
@@ -1037,34 +1049,13 @@ async function persistOrder(o, items, status, paymentMethod = "COD", paymentMeta
   const orderCode = createOrderCode();
   const total = computeOrderTotal(items);
   const createdAt = new Date().toISOString();
-  db.prepare(`
-    INSERT INTO orders
-    (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at, payment_method, paypal_order_id, paypal_capture_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    orderCode,
-    o.customerName,
-    String(o.email).toLowerCase(),
-    o.phone,
-    o.address,
-    o.city,
-    o.state,
-    o.pincode,
-    status,
-    total,
-    JSON.stringify(items),
-    createdAt,
-    paymentMethod,
-    paymentMeta.paypalOrderId || null,
-    paymentMeta.paypalCaptureId || null
-  );
-  const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
-  for (const item of items) reduceStock.run(item.quantity, item.id);
-  saveDbSafe("orders");
-  const order = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode) || {
+  const checkoutEmail = normalizeOrderEmail(o.email);
+  const accountEmail = normalizeOrderEmail(paymentMeta.accountEmail || o.accountEmail || "");
+  const itemsJson = JSON.stringify(items);
+  const orderPayload = {
     order_code: orderCode,
     customer_name: o.customerName,
-    email: String(o.email).toLowerCase(),
+    email: checkoutEmail,
     phone: o.phone,
     address: o.address,
     city: o.city,
@@ -1072,13 +1063,48 @@ async function persistOrder(o, items, status, paymentMethod = "COD", paymentMeta
     pincode: o.pincode,
     status,
     total,
-    items_json: JSON.stringify(items),
+    items_json: itemsJson,
     created_at: createdAt,
     payment_method: paymentMethod,
     paypal_order_id: paymentMeta.paypalOrderId || null,
-    paypal_capture_id: paymentMeta.paypalCaptureId || null
+    paypal_capture_id: paymentMeta.paypalCaptureId || null,
+    account_email: accountEmail || null
   };
-  if (fbMirror) { try { await fbMirror.mirrorOrder(order); } catch (_) {} }
+  db.prepare(`
+    INSERT INTO orders
+    (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at, payment_method, paypal_order_id, paypal_capture_id, account_email)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    orderPayload.order_code,
+    orderPayload.customer_name,
+    orderPayload.email,
+    orderPayload.phone,
+    orderPayload.address,
+    orderPayload.city,
+    orderPayload.state,
+    orderPayload.pincode,
+    orderPayload.status,
+    orderPayload.total,
+    orderPayload.items_json,
+    orderPayload.created_at,
+    orderPayload.payment_method,
+    orderPayload.paypal_order_id,
+    orderPayload.paypal_capture_id,
+    orderPayload.account_email
+  );
+  const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
+  for (const item of items) reduceStock.run(item.quantity, item.id);
+  try { saveDbStrict("orders"); } catch (error) { if (IS_PRODUCTION) throw new Error("Could not durably save order. Please try again."); }
+  const order = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode) || orderPayload;
+  let mirrorResult = { mirrored: false, error: "Firestore mirror unavailable" };
+  if (fbMirror && fbMirror.mirrorOrder) {
+    try { mirrorResult = await fbMirror.mirrorOrder(order); }
+    catch (error) { mirrorResult = { mirrored: false, error: error.message || "Firestore mirror failed" }; }
+  }
+  if (IS_PRODUCTION && !mirrorResult.mirrored) {
+    console.warn("[orders] durable Firestore mirror failed before email:", orderCode, checkoutEmail, mirrorResult.error || "unknown");
+    throw new Error("Could not confirm order storage. Please try again before payment is confirmed.");
+  }
   try { await sendOrderNotifications(order, items); } catch (error) { console.warn("[order-email] notification failed:", error.message); }
   return { orderCode, total, order, items };
 }
@@ -1635,7 +1661,8 @@ function normalizeOrderEmail(email) {
 }
 
 function getOrdersByEmail(email) {
-  return db.prepare("SELECT * FROM orders WHERE email = ? ORDER BY id DESC").all(normalizeOrderEmail(email));
+  const normalized = normalizeOrderEmail(email);
+  return db.prepare("SELECT * FROM orders WHERE email = ? OR account_email = ? ORDER BY id DESC").all(normalized, normalized);
 }
 
 function getLocalOrderByCode(orderCode) {
@@ -1660,12 +1687,13 @@ async function getOrdersByEmailMerged(email, { limit = 1000 } = {}) {
   const normalized = normalizeOrderEmail(email);
   const localOrders = getOrdersByEmail(normalized).map((row) => ({ ...row, _source: "SQLite" }));
   const fbOrders = fbMirror && fbMirror.listOrders ? await fbMirror.listOrders({ limit }) : [];
-  const matchingFbOrders = (fbOrders || []).filter((row) => normalizeOrderEmail(row.email) === normalized);
+  const matchingFbOrders = (fbOrders || []).filter((row) => normalizeOrderEmail(row.email) === normalized || normalizeOrderEmail(row.account_email) === normalized);
   return mergeByKey(localOrders, matchingFbOrders, (row) => row.order_code);
 }
 
 function userOwnsOrder(user, order) {
-  return Boolean(user && order && normalizeOrderEmail(user.email) === normalizeOrderEmail(order.email));
+  const userEmail = normalizeOrderEmail(user && user.email);
+  return Boolean(userEmail && order && (userEmail === normalizeOrderEmail(order.email) || userEmail === normalizeOrderEmail(order.account_email)));
 }
 
 function canViewOrderDetails(user, order) {
@@ -4448,6 +4476,7 @@ async function getAdminData({ q = "" } = {}) {
   const localOrders = db.prepare("SELECT * FROM orders ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" }));
   const localContacts = (() => { try { return db.prepare("SELECT * FROM contact_messages ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
   const localSupportTokens = (() => { try { return db.prepare("SELECT * FROM support_tokens ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
+  const localNewsletterSubscribers = (() => { try { return db.prepare("SELECT * FROM newsletter_subscribers ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
   const localOtpLogs = (() => { try { return db.prepare("SELECT email, purpose, expires_at, consumed, created_at FROM otp_codes ORDER BY id DESC LIMIT 500").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
   const localEmailEvents = (() => { try { return db.prepare("SELECT * FROM email_events ORDER BY id DESC LIMIT 500").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
   const localUsers = (() => {
@@ -4455,26 +4484,29 @@ async function getAdminData({ q = "" } = {}) {
     catch { return []; }
   })();
 
-  const [fbOrders, fbContacts, fbOtpLogs, fbEmailEvents, fbSupportTokens, fbAuthUsers] = fbMirror ? await Promise.all([
+  const [fbOrders, fbContacts, fbOtpLogs, fbEmailEvents, fbSupportTokens, fbAuthUsers, fbUsers, fbNewsletterSubscribers] = fbMirror ? await Promise.all([
     fbMirror.listOrders ? fbMirror.listOrders({ limit: 1000 }) : [],
     fbMirror.listContactMessages ? fbMirror.listContactMessages({ limit: 500 }) : [],
     fbMirror.listOtpLogs ? fbMirror.listOtpLogs({ limit: 500 }) : [],
     fbMirror.listEmailEvents ? fbMirror.listEmailEvents({ limit: 500 }) : [],
-    fbMirror.listSupportTokens ? fbMirror.listSupportTokens({ limit: 250 }) : [],
-    fbMirror.listAuthUsers ? fbMirror.listAuthUsers({ limit: 1000 }) : []
-  ]) : [[], [], [], [], [], []];
+    fbMirror.listSupportTokens ? fbMirror.listSupportTokens({ limit: 500 }) : [],
+    fbMirror.listAuthUsers ? fbMirror.listAuthUsers({ limit: 1000 }) : [],
+    fbMirror.listUsers ? fbMirror.listUsers({ limit: 1000 }) : [],
+    fbMirror.listNewsletterSubscribers ? fbMirror.listNewsletterSubscribers({ limit: 1000 }) : []
+  ]) : [[], [], [], [], [], [], [], []];
 
   const orders = mergeByKey(localOrders, fbOrders || [], (row) => row.order_code);
-  const contacts = mergeByKey(localContacts, fbContacts, (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.subject || ""}`);
-  const supportTokens = mergeByKey(localSupportTokens, fbSupportTokens, (row) => row.token || `${row.created_at}:${row.email}`);
-  const otpLogsRaw = mergeByKey(localOtpLogs, fbOtpLogs, (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.purpose || ""}`);
-  const emailEvents = mergeByKey(localEmailEvents, fbEmailEvents, (row) => `${row.created_at || row._mirroredAt || ""}:${row.recipient || ""}:${row.subject || ""}`);
+  const contacts = mergeByKey(localContacts, fbContacts || [], (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.subject || ""}`);
+  const supportTokens = mergeByKey(localSupportTokens, fbSupportTokens || [], (row) => row.token || `${row.created_at}:${row.email}`);
+  const newsletterSubscribers = mergeByKey(localNewsletterSubscribers, fbNewsletterSubscribers || [], (row) => normalizeOrderEmail(row.email));
+  const otpLogsRaw = mergeByKey(localOtpLogs, fbOtpLogs || [], (row) => `${row.created_at || row._mirroredAt || ""}:${normalizeOrderEmail(row.email)}:${row.purpose || ""}`);
+  const emailEvents = mergeByKey(localEmailEvents, fbEmailEvents || [], (row) => `${row.created_at || row._mirroredAt || ""}:${row.recipient || ""}:${row.subject || ""}`);
   const usersByEmail = new Map();
   for (const user of localUsers) {
     const email = normalizeOrderEmail(user.email);
     if (email) usersByEmail.set(email, { ...user, email });
   }
-  for (const user of fbAuthUsers || []) {
+  for (const user of [...(fbAuthUsers || []), ...(fbUsers || [])]) {
     const email = normalizeOrderEmail(user.email);
     if (!email) continue;
     const existing = usersByEmail.get(email) || {};
@@ -4491,38 +4523,62 @@ async function getAdminData({ q = "" } = {}) {
   }
   const allUsersMerged = Array.from(usersByEmail.values()).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   const customersMap = new Map();
+  const ensureCustomer = (email, fallbackName = "") => {
+    const normalized = normalizeOrderEmail(email);
+    if (!normalized) return null;
+    if (!customersMap.has(normalized)) {
+      customersMap.set(normalized, { email: normalized, customer_name: fallbackName || normalized, phone: "", orders: 0, total_spent: 0, registered: false, verified: 0, registered_at: "", first_order_at: "", last_order_at: "", latest_address: "", city: "", state: "", pincode: "", order_refs: [], checkout_emails: [], account_emails: [], sources: [], newsletter_subscribed: false, newsletter_subscribed_at: "", support_token_count: 0, last_support_at: "", last_seen_at: "" });
+    }
+    const customer = customersMap.get(normalized);
+    if ((!customer.customer_name || customer.customer_name === normalized) && fallbackName) customer.customer_name = fallbackName;
+    return customer;
+  };
+  const markCustomerSource = (customer, source, date = "") => {
+    if (!customer) return;
+    if (source && !(customer.sources || []).includes(source)) customer.sources.push(source);
+    if (date && (!customer.last_seen_at || new Date(date) > new Date(customer.last_seen_at))) customer.last_seen_at = date;
+  };
 
   for (const user of allUsersMerged) {
     const email = normalizeOrderEmail(user.email);
-    if (!email) continue;
-    customersMap.set(email, { email, customer_name: user.name || email, phone: "", orders: 0, total_spent: 0, registered: true, verified: Number(user.verified || 0), registered_at: user.created_at || "", first_order_at: "", last_order_at: "", latest_address: "", city: "", state: "", pincode: "", order_refs: [] });
+    const existing = ensureCustomer(email, user.name || email);
+    if (!existing) continue;
+    existing.registered = true;
+    existing.verified = Number(existing.verified || 0) || Number(user.verified || 0);
+    existing.registered_at = existing.registered_at || user.created_at || user._mirroredAt || "";
+    markCustomerSource(existing, "user", user.created_at || user._mirroredAt || "");
   }
 
   for (const order of orders) {
-    const email = normalizeOrderEmail(order.email);
-    if (!email) continue;
-    const existing = customersMap.get(email) || { email, customer_name: order.customer_name || email, phone: "", orders: 0, total_spent: 0, registered: false, verified: 0, registered_at: "", first_order_at: "", last_order_at: "", latest_address: "", city: "", state: "", pincode: "", order_refs: [] };
+    const emails = [normalizeOrderEmail(order.email), normalizeOrderEmail(order.account_email)].filter(Boolean);
+    if (!emails.length) continue;
     const orderDate = order.created_at || order._mirroredAt || "";
-    if ((!existing.customer_name || existing.customer_name === email) && order.customer_name) existing.customer_name = order.customer_name;
-    if (!existing.phone && order.phone) existing.phone = order.phone;
-    existing.orders += 1;
-    existing.total_spent += Number(order.total || 0);
-    existing.first_order_at = !existing.first_order_at || (orderDate && new Date(orderDate) < new Date(existing.first_order_at)) ? orderDate : existing.first_order_at;
-    existing.last_order_at = !existing.last_order_at || (orderDate && new Date(orderDate) > new Date(existing.last_order_at)) ? orderDate : existing.last_order_at;
-    if (!existing.latest_address || orderDate === existing.last_order_at) {
-      existing.latest_address = orderAddress(order);
-      existing.city = order.city || existing.city;
-      existing.state = order.state || existing.state;
-      existing.pincode = order.pincode || existing.pincode;
+    for (const email of [...new Set(emails)]) {
+      const existing = ensureCustomer(email, order.customer_name || email);
+      if (!existing) continue;
+      if (order.email && !existing.checkout_emails.includes(normalizeOrderEmail(order.email))) existing.checkout_emails.push(normalizeOrderEmail(order.email));
+      if (order.account_email && !existing.account_emails.includes(normalizeOrderEmail(order.account_email))) existing.account_emails.push(normalizeOrderEmail(order.account_email));
+      if ((!existing.customer_name || existing.customer_name === email) && order.customer_name) existing.customer_name = order.customer_name;
+      if (!existing.phone && order.phone) existing.phone = order.phone;
+      existing.orders += 1;
+      existing.total_spent += Number(order.total || 0);
+      existing.first_order_at = !existing.first_order_at || (orderDate && new Date(orderDate) < new Date(existing.first_order_at)) ? orderDate : existing.first_order_at;
+      existing.last_order_at = !existing.last_order_at || (orderDate && new Date(orderDate) > new Date(existing.last_order_at)) ? orderDate : existing.last_order_at;
+      if (!existing.latest_address || orderDate === existing.last_order_at) {
+        existing.latest_address = orderAddress(order);
+        existing.city = order.city || existing.city;
+        existing.state = order.state || existing.state;
+        existing.pincode = order.pincode || existing.pincode;
+      }
+      if (order.order_code && !existing.order_refs.includes(order.order_code)) existing.order_refs.push(order.order_code);
+      markCustomerSource(existing, "order", orderDate);
     }
-    if (order.order_code) existing.order_refs.push(order.order_code);
-    customersMap.set(email, existing);
   }
 
   for (const contact of contacts) {
     const email = normalizeOrderEmail(contact.email);
-    if (!email) continue;
-    const existing = customersMap.get(email) || { email, customer_name: contact.name || email, phone: "", orders: 0, total_spent: 0, registered: false, verified: 0, registered_at: "", first_order_at: "", last_order_at: "", latest_address: "", city: "", state: "", pincode: "", order_refs: [] };
+    const existing = ensureCustomer(email, contact.name || email);
+    if (!existing) continue;
     if (!existing.phone && contact.phone) existing.phone = contact.phone;
     if ((!existing.customer_name || existing.customer_name === email) && contact.name) existing.customer_name = contact.name;
     const contactDate = contact.created_at || contact._mirroredAt || "";
@@ -4532,10 +4588,30 @@ async function getAdminData({ q = "" } = {}) {
       existing.last_contact_message = contact.message || "";
       existing.last_contact_source = contact._source || "";
     }
-    customersMap.set(email, existing);
+    markCustomerSource(existing, "contact", contactDate);
   }
 
-  const customers = Array.from(customersMap.values()).sort((a, b) => new Date(b.last_order_at || b.registered_at || 0) - new Date(a.last_order_at || a.registered_at || 0));
+  for (const sub of newsletterSubscribers) {
+    const email = normalizeOrderEmail(sub.email);
+    const existing = ensureCustomer(email, email);
+    if (!existing) continue;
+    const subDate = sub.created_at || sub._mirroredAt || "";
+    existing.newsletter_subscribed = true;
+    existing.newsletter_subscribed_at = existing.newsletter_subscribed_at || subDate;
+    markCustomerSource(existing, "newsletter", subDate);
+  }
+
+  for (const token of supportTokens) {
+    const email = normalizeOrderEmail(token.email);
+    const existing = ensureCustomer(email, email);
+    if (!existing) continue;
+    const supportDate = token.created_at || token._mirroredAt || "";
+    existing.support_token_count += 1;
+    existing.last_support_at = !existing.last_support_at || (supportDate && new Date(supportDate) > new Date(existing.last_support_at)) ? supportDate : existing.last_support_at;
+    markCustomerSource(existing, "support", supportDate);
+  }
+
+  const customers = Array.from(customersMap.values()).sort((a, b) => new Date(b.last_seen_at || b.last_order_at || b.registered_at || 0) - new Date(a.last_seen_at || a.last_order_at || a.registered_at || 0));
   const customerByEmail = new Map(customers.map((c) => [normalizeOrderEmail(c.email), c]));
   const otpLogs = otpLogsRaw.map((row) => {
     const email = normalizeOrderEmail(row.email);
@@ -4546,10 +4622,10 @@ async function getAdminData({ q = "" } = {}) {
 
   const search = String(q || "").trim().toLowerCase();
   const searchResults = search ? {
-    orders: orders.filter((o) => [o.order_code, o.customer_name, o.email, o.phone, o.total, o.status].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25),
+    orders: orders.filter((o) => [invoiceRef(o), o.order_code, o.customer_name, o.email, o.account_email, o.phone, o.total, o.status, o.address, o.city, o.state, o.pincode, o.payment_method, o.paypal_order_id, o.paypal_capture_id].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25),
     products: db.prepare("SELECT * FROM products WHERE name LIKE ? OR brand LIKE ? OR price LIKE ? ORDER BY id DESC LIMIT 25").all(`%${q}%`, `%${q}%`, `%${q}%`).map(normalizeProduct),
     contacts: contacts.filter((c) => [c.name, c.email, c.phone, c.subject, c.message].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25),
-    customers: customers.filter((c) => [c.customer_name, c.email, c.phone, c.latest_address, c.order_refs.join(" ")].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25)
+    customers: customers.filter((c) => [c.customer_name, c.email, c.phone, c.latest_address, c.order_refs.join(" "), (c.sources || []).join(" "), (c.checkout_emails || []).join(" "), (c.account_emails || []).join(" "), c.newsletter_subscribed_at, c.last_support_at].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25)
   } : null;
   return { orders, contacts, supportTokens, otpLogs, emailEvents, users: allUsersMerged, customers, searchResults };
 }
@@ -4697,7 +4773,7 @@ function adminPage(user = null, opts = {}) {
             <tr>
               <td><strong>${escapeHtml(order.order_code)}</strong><br><span class="cr-admin-muted">${escapeHtml(invoiceRef(order))}</span></td>
               <td>${escapeHtml(order.customer_name || "")}</td>
-              <td>${escapeHtml(order.email || "")}<br>${order.phone ? `<a href="tel:${escapeHtml(order.phone)}">${escapeHtml(order.phone)}</a>` : "—"}</td>
+              <td>${escapeHtml(order.email || "")}${order.account_email && normalizeOrderEmail(order.account_email) !== normalizeOrderEmail(order.email) ? `<br><span class="cr-admin-muted">Account: ${escapeHtml(order.account_email)}</span>` : ""}<br>${order.phone ? `<a href="tel:${escapeHtml(order.phone)}">${escapeHtml(order.phone)}</a>` : "—"}</td>
               <td>${formatAdminDate(order.created_at || order._mirroredAt, false)}</td>
               <td>${escapeHtml(itemSummary || "—")}</td>
               <td>${escapeHtml(orderAddress(order) || "—")}</td>
@@ -4718,6 +4794,7 @@ function adminPage(user = null, opts = {}) {
                   <summary>View</summary>
                   <div><strong>Invoice:</strong> ${escapeHtml(invoiceRef(order))}</div>
                   <div><strong>Full address:</strong> ${escapeHtml(orderAddress(order) || "—")}</div>
+                  ${order.account_email ? `<div><strong>Account email:</strong> ${escapeHtml(order.account_email)}</div>` : ""}
                   <div><strong>Created:</strong> ${formatAdminDate(order.created_at || order._mirroredAt)}</div>
                   <div><strong>Payment:</strong> ${escapeHtml(order.payment_method || "COD")} · ${escapeHtml(order.status || "")}</div>
                   ${paymentIds ? `<div><strong>Provider IDs:</strong> ${escapeHtml(paymentIds)}</div>` : ""}
@@ -4733,6 +4810,15 @@ function adminPage(user = null, opts = {}) {
     </section>
   `;
 
+  const renderCustomerRow = (c) => {
+    const phoneCell = c.phone ? `<a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>` : `<span class="cr-admin-muted">Not provided yet</span>`;
+    const sources = (c.sources || []).join(", ") || "—";
+    const supportLine = c.support_token_count ? `${c.support_token_count} support token${c.support_token_count === 1 ? "" : "s"}${c.last_support_at ? ` · ${formatAdminDate(c.last_support_at, false)}` : ""}` : "No support tokens";
+    const newsletterLine = c.newsletter_subscribed ? `Yes${c.newsletter_subscribed_at ? ` · ${formatAdminDate(c.newsletter_subscribed_at, false)}` : ""}` : "No";
+    const addressLine = c.latest_address || "Not provided yet";
+    return `<tr><td>${escapeHtml(c.customer_name || c.email)}</td><td>${escapeHtml(c.email)}</td><td>${phoneCell}</td><td>${c.registered ? `Yes<br><span class="cr-admin-muted">${c.registered_at ? formatAdminDate(c.registered_at, false) : ""}</span>` : "No"}</td><td><span class="cr-admin-badge ${c.verified ? "is-verified" : "is-unverified"}">${c.verified ? "Verified" : "Unverified"}</span></td><td>${c.orders || 0}<br><span class="cr-admin-muted">${escapeHtml((c.order_refs || []).slice(0, 4).join(", ") || "No orders")}</span></td><td>${currency(c.total_spent || 0)}</td><td>${c.first_order_at ? formatAdminDate(c.first_order_at, false) : "—"}</td><td>${c.last_order_at ? formatAdminDate(c.last_order_at, false) : "—"}</td><td>${escapeHtml(addressLine)}</td><td>${c.last_contact_at ? `${escapeHtml(c.last_contact_subject || "Contact")}<br><span class="cr-admin-muted">${formatAdminDate(c.last_contact_at, false)}</span>` : "—"}</td><td><details class="cr-admin-details"><summary>View</summary><div><strong>Name:</strong> ${escapeHtml(c.customer_name || "—")}</div><div><strong>Email:</strong> ${escapeHtml(c.email || "—")}</div><div><strong>Phone:</strong> ${c.phone ? escapeHtml(c.phone) : "Not provided yet"}</div><div><strong>Registered:</strong> ${c.registered ? "Yes" : "No"}</div><div><strong>Verified:</strong> ${c.verified ? "Yes" : "No"}</div><div><strong>Sources:</strong> ${escapeHtml(sources)}</div><div><strong>Newsletter:</strong> ${escapeHtml(newsletterLine)}</div><div><strong>Support:</strong> ${escapeHtml(supportLine)}</div><div><strong>Total spent:</strong> ${currency(c.total_spent || 0)}</div><div><strong>Address:</strong> ${escapeHtml(addressLine)}</div><div><strong>City/state/pincode:</strong> ${escapeHtml([c.city, c.state, c.pincode].filter(Boolean).join(", ") || "Not provided yet")}</div><div><strong>Checkout emails:</strong> ${escapeHtml((c.checkout_emails || []).join(", ") || "—")}</div><div><strong>Account emails:</strong> ${escapeHtml((c.account_emails || []).join(", ") || "—")}</div><div><strong>Order refs:</strong> ${escapeHtml((c.order_refs || []).join(", ") || "—")}</div><div><strong>Last contact:</strong> ${escapeHtml(c.last_contact_subject || "—")}${c.last_contact_message ? `<br><span class="cr-admin-muted">${escapeHtml(String(c.last_contact_message).slice(0, 300))}</span>` : ""}</div></details></td></tr>`;
+  };
+
   const customersSection = `
     <section class="cr-admin-card" id="customers">
       <div class="cr-admin-card-head"><h3>Customers (${stats.customers})</h3></div>
@@ -4740,7 +4826,7 @@ function adminPage(user = null, opts = {}) {
       <table class="cr-admin-table is-wide">
         <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Registered</th><th>Verified</th><th>Orders</th><th>Total spent</th><th>First order</th><th>Last order</th><th>Latest address</th><th>Last contact</th><th>All details</th></tr></thead>
         <tbody>
-          ${allCustomers.length ? allCustomers.map(c => `<tr><td>${escapeHtml(c.customer_name || c.email)}</td><td>${escapeHtml(c.email)}</td><td>${c.phone ? `<a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>` : "—"}</td><td>${c.registered ? `Yes<br><span class="cr-admin-muted">${c.registered_at ? formatAdminDate(c.registered_at, false) : ""}</span>` : "No"}</td><td><span class="cr-admin-badge ${c.verified ? "is-verified" : "is-unverified"}">${c.verified ? "Verified" : "Unverified"}</span></td><td>${c.orders || 0}<br><span class="cr-admin-muted">${escapeHtml((c.order_refs || []).slice(0, 4).join(", ") || "No orders")}</span></td><td>${currency(c.total_spent || 0)}</td><td>${c.first_order_at ? formatAdminDate(c.first_order_at, false) : "—"}</td><td>${c.last_order_at ? formatAdminDate(c.last_order_at, false) : "—"}</td><td>${escapeHtml(c.latest_address || "—")}</td><td>${c.last_contact_at ? `${escapeHtml(c.last_contact_subject || "Contact")}<br><span class="cr-admin-muted">${formatAdminDate(c.last_contact_at, false)}</span>` : "—"}</td><td><details class="cr-admin-details"><summary>View</summary><div><strong>Name:</strong> ${escapeHtml(c.customer_name || "—")}</div><div><strong>Email:</strong> ${escapeHtml(c.email || "—")}</div><div><strong>Phone:</strong> ${escapeHtml(c.phone || "—")}</div><div><strong>Registered:</strong> ${c.registered ? "Yes" : "No"}</div><div><strong>Verified:</strong> ${c.verified ? "Yes" : "No"}</div><div><strong>Total spent:</strong> ${currency(c.total_spent || 0)}</div><div><strong>Address:</strong> ${escapeHtml(c.latest_address || "—")}</div><div><strong>City/state/pincode:</strong> ${escapeHtml([c.city, c.state, c.pincode].filter(Boolean).join(", ") || "—")}</div><div><strong>Order refs:</strong> ${escapeHtml((c.order_refs || []).join(", ") || "—")}</div><div><strong>Last contact:</strong> ${escapeHtml(c.last_contact_subject || "—")}${c.last_contact_message ? `<br><span class="cr-admin-muted">${escapeHtml(String(c.last_contact_message).slice(0, 300))}</span>` : ""}</div></details></td></tr>`).join("") : `<tr><td colspan="12">No customers yet.</td></tr>`}
+          ${allCustomers.length ? allCustomers.map(renderCustomerRow).join("") : `<tr><td colspan="12">No customers yet.</td></tr>`}
         </tbody>
       </table>
       </div>
@@ -4896,7 +4982,7 @@ function adminPage(user = null, opts = {}) {
             <tr>
               <td>${escapeHtml(order.order_code)}<br><span class="cr-admin-muted">${escapeHtml(invoiceRef(order))}</span></td>
               <td>${escapeHtml(order.customer_name || "")}</td>
-              <td>${escapeHtml(order.email || "")}<br>${order.phone ? `<a href="tel:${escapeHtml(order.phone)}">${escapeHtml(order.phone)}</a>` : "—"}</td>
+              <td>${escapeHtml(order.email || "")}${order.account_email && normalizeOrderEmail(order.account_email) !== normalizeOrderEmail(order.email) ? `<br><span class="cr-admin-muted">Account: ${escapeHtml(order.account_email)}</span>` : ""}<br>${order.phone ? `<a href="tel:${escapeHtml(order.phone)}">${escapeHtml(order.phone)}</a>` : "—"}</td>
               <td>${escapeHtml([order.city, order.state].filter(Boolean).join(", ") || "—")}</td>
               <td>${escapeHtml(orderItemsSummary(order) || "—")}</td>
               <td>${currency(order.total)}</td>
@@ -6433,7 +6519,7 @@ async function handleRequest(req, res) {
       const payload = JSON.parse(raw || "{}");
       validateCheckoutPayload(payload);
       const items = hydrateOrderItems(payload.items);
-      const saved = await persistOrder(payload, items, "Pending", "COD");
+      const saved = await persistOrder(payload, items, "Pending", "COD", { accountEmail: currentUser && currentUser.email });
       json(res, 201, { orderCode: saved.orderCode });
       return;
     } catch (error) {
@@ -6502,7 +6588,8 @@ async function handleRequest(req, res) {
       }
       const saved = await persistOrder(order, items, "Paid", "paypal", {
         paypalOrderId,
-        paypalCaptureId: captureEntry && captureEntry.id ? captureEntry.id : null
+        paypalCaptureId: captureEntry && captureEntry.id ? captureEntry.id : null,
+        accountEmail: currentUser && currentUser.email
       });
       await sendPaidInvoice(saved.order, saved.items);
       json(res, 201, { ok: true, orderCode: saved.orderCode, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
@@ -6556,7 +6643,7 @@ async function handleRequest(req, res) {
       const o = order || {};
       validateCheckoutPayload(o);
       const items = hydrateOrderItems(o.items);
-      const saved = await persistOrder(o, items, "Paid", "razorpay");
+      const saved = await persistOrder(o, items, "Paid", "razorpay", { accountEmail: currentUser && currentUser.email });
       await sendPaidInvoice(saved.order, saved.items);
       json(res, 201, { orderCode: saved.orderCode, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
       return;
@@ -7004,7 +7091,7 @@ async function handleRequest(req, res) {
       const o = payload.order || payload;
       validateCheckoutPayload(o);
       const items = hydrateOrderItems(o.items);
-      const saved = await persistOrder(o, items, "Awaiting payment confirmation", provider);
+      const saved = await persistOrder(o, items, "Awaiting payment confirmation", provider, { accountEmail: currentUser && currentUser.email });
       json(res, 200, { ok: true, orderCode: saved.orderCode, checkoutUrl: `/order-success/${encodeURIComponent(saved.orderCode)}`, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
       return;
     } catch (e) { json(res, 400, { error: e.message }); return; }

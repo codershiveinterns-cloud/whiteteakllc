@@ -113,6 +113,11 @@ class DatabaseShim {
       fs.writeFileSync(this._filePath, buf);
     } catch (e) { /* ignore on readonly fs */ }
   }
+  saveStrict() {
+    if (!this._filePath) return;
+    const buf = Buffer.from(this._db.export());
+    fs.writeFileSync(this._filePath, buf);
+  }
 }
 
 function findWasmPath(file) {
