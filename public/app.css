@@ -2880,6 +2880,13 @@ body.mp-nav-open { overflow: hidden; }
 .cr-co-express-btn { border: 0; border-radius: 999px; padding: 12px 20px; background: #003087; color: #fff; font-weight: 800; cursor: pointer; box-shadow: 0 10px 22px rgba(0, 48, 135, 0.18); }
 .cr-co-express-btn:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
 .cr-co-advance-paypal small { display:block; margin-top:3px; color:#6b7280; font-weight:500; line-height:1.35; }
+.cr-co-card-fields { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line, #e5e7eb); border-radius: 14px; background: var(--surface, #fff); }
+.cr-co-card-fields[hidden] { display: none !important; }
+.cr-co-card-fields label { display: grid; gap: 6px; color: var(--text-muted, #6b7280); font-weight: 700; font-size: 13px; }
+.cr-co-card-field { min-height: 46px; padding: 12px; border: 1px solid var(--line, #e5e7eb); border-radius: 10px; background: var(--bg, #fff); }
+.cr-co-card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cr-co-card-submit { border: 0; border-radius: 999px; padding: 13px 18px; background: #003087; color: #fff; font-weight: 900; cursor: pointer; }
+@media (max-width: 520px) { .cr-co-card-grid { grid-template-columns: 1fr; } }
 
 /* hide legacy site-footer (replaced by the WhiteTeakLLC footer site-wide) */
 body .site-footer { display:none !important; }

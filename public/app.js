@@ -1318,9 +1318,15 @@
     var paypalClientId = shell.getAttribute("data-paypal-client-id") || "";
     var paypalWrap = shell.querySelector("[data-paypal-button-wrap]");
     var paypalButton = shell.querySelector("[data-paypal-button]");
+    var paypalCardFields = shell.querySelector("[data-paypal-card-fields]");
+    var paypalCardNumber = shell.querySelector("[data-paypal-card-number]");
+    var paypalCardExpiry = shell.querySelector("[data-paypal-card-expiry]");
+    var paypalCardCvv = shell.querySelector("[data-paypal-card-cvv]");
+    var paypalCardSubmit = shell.querySelector("[data-paypal-card-submit]");
     var submitButton = shell.querySelector("[data-checkout-submit]");
     var checkoutMessage = shell.querySelector("[data-checkout-message]");
     var paypalRendered = false;
+    var paypalCardRendered = false;
     var paypalLoading = null;
     var paypalRendering = false;
     var mobilePayPalMq = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
@@ -1403,13 +1409,52 @@
       if (paypalLoading) return paypalLoading;
       paypalLoading = new Promise(function (resolve, reject) {
         if (!paypalClientId) { reject(new Error("PayPal client ID missing")); return; }
-        var s = document.createElement("script");
-        s.src = "https://www.paypal.com/sdk/js?client-id=" + encodeURIComponent(paypalClientId) + "&currency=USD&intent=capture&components=buttons&enable-funding=card";
-        s.onload = function () { resolve(); };
-        s.onerror = function () { reject(new Error("Failed to load PayPal SDK")); };
-        document.head.appendChild(s);
+        fetch("/api/payment/paypal/client-token", { method: "POST" })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (res) {
+            if (!res.ok || !res.j.clientToken) throw new Error(res.j.error || "Could not prepare card checkout");
+            var s = document.createElement("script");
+            s.src = "https://www.paypal.com/sdk/js?client-id=" + encodeURIComponent(paypalClientId) + "&currency=USD&intent=capture&components=buttons,card-fields&enable-funding=card";
+            s.setAttribute("data-client-token", res.j.clientToken);
+            s.onload = function () { resolve(); };
+            s.onerror = function () { reject(new Error("Failed to load PayPal SDK")); };
+            document.head.appendChild(s);
+          }).catch(reject);
       });
       return paypalLoading;
+    }
+    function createAdvancePayPalOrder() {
+      var order = getCheckoutOrder();
+      if (!order.items.length) {
+        setStatus("Your cart is empty.", true);
+        return Promise.reject(new Error("Your cart is empty"));
+      }
+      setStatus("Preparing secure card payment…", false);
+      return fetch("/api/payment/paypal/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order: order })
+      }).then(function (r) {
+        return r.json().then(function (j) {
+          if (!r.ok || !j.ok || !j.paypalOrderId) throw new Error(j.error || "Could not create PayPal order");
+          return j.paypalOrderId;
+        });
+      });
+    }
+    function captureAdvancePayPalOrder(paypalOrderId) {
+      var order = getCheckoutOrder();
+      setStatus("Confirming card payment…", false);
+      return fetch("/api/payment/paypal/capture-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paypalOrderId: paypalOrderId, order: order })
+      }).then(function (r) {
+        return r.json().then(function (j) {
+          if (!r.ok || !j.ok) throw new Error(j.error || "Could not capture PayPal payment");
+          try { localStorage.setItem("wizardzwork-cart", "[]"); } catch (_) {}
+          location.href = j.redirect || ("/order-success/" + encodeURIComponent(j.orderCode));
+        });
+      });
     }
     function renderPayPalButtons() {
       if (!paypalReady || !paypalButton || paypalRendered || paypalRendering) return;
@@ -1420,45 +1465,41 @@
         if (!window.paypal) throw new Error("Could not load PayPal");
         if (paypalRendered) return;
         paypalButton.innerHTML = "";
+        if (window.paypal.CardFields && paypalCardFields && paypalCardNumber && paypalCardExpiry && paypalCardCvv && paypalCardSubmit) {
+          var cardFields = window.paypal.CardFields({
+            createOrder: createAdvancePayPalOrder,
+            onApprove: function (data) {
+              return captureAdvancePayPalOrder(data.orderID).catch(function (err) {
+                setStatus(err.message || "Could not capture card payment", true);
+                throw err;
+              });
+            },
+            onError: function (err) {
+              setStatus((err && err.message) || "Card payment failed", true);
+            }
+          });
+          if (cardFields && cardFields.isEligible && cardFields.isEligible()) {
+            paypalCardFields.hidden = false;
+            paypalButton.hidden = true;
+            cardFields.NumberField().render(paypalCardNumber);
+            cardFields.ExpiryField().render(paypalCardExpiry);
+            cardFields.CVVField().render(paypalCardCvv);
+            paypalCardSubmit.onclick = function () {
+              setStatus("Processing card payment…", false);
+              cardFields.submit().catch(function (err) {
+                setStatus((err && err.message) || "Card payment could not be completed", true);
+              });
+            };
+            paypalCardRendered = true;
+            return;
+          }
+        }
+        paypalButton.hidden = false;
         return window.paypal.Buttons({
           fundingSource: window.paypal.FUNDING.CARD,
-          createOrder: function () {
-            if (getPayVal() !== "paypal_advance" && form && !form.reportValidity()) {
-              setStatus("Please complete the highlighted checkout fields before PayPal payment.", true);
-              return Promise.reject(new Error("Checkout details are incomplete"));
-            }
-            var order = getCheckoutOrder();
-            if (!order.items.length) {
-              setStatus("Your cart is empty.", true);
-              return Promise.reject(new Error("Your cart is empty"));
-            }
-            setStatus("Opening PayPal checkout…", false);
-            return fetch("/api/payment/paypal/create-order", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ order: order })
-            }).then(function (r) {
-              return r.json().then(function (j) {
-                if (!r.ok || !j.ok || !j.paypalOrderId) throw new Error(j.error || "Could not create PayPal order");
-                setStatus("");
-                return j.paypalOrderId;
-              });
-            });
-          },
+          createOrder: createAdvancePayPalOrder,
           onApprove: function (data) {
-            var order = getCheckoutOrder();
-            setStatus("Confirming PayPal payment…", false);
-            return fetch("/api/payment/paypal/capture-order", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ paypalOrderId: data.orderID, order: order })
-            }).then(function (r) {
-              return r.json().then(function (j) {
-                if (!r.ok || !j.ok) throw new Error(j.error || "Could not capture PayPal payment");
-                try { localStorage.setItem("wizardzwork-cart", "[]"); } catch (_) {}
-                location.href = j.redirect || ("/order-success/" + encodeURIComponent(j.orderCode));
-              });
-            }).catch(function (err) {
+            return captureAdvancePayPalOrder(data.orderID).catch(function (err) {
               setStatus(err.message || "Could not capture PayPal payment", true);
               throw err;
             });

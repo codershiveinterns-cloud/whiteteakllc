@@ -953,6 +953,11 @@ async function capturePayPalOrder(paypalOrderId) {
   return paypalApiRequest("POST", `/v2/checkout/orders/${encodeURIComponent(paypalOrderId)}/capture`, {}, accessToken);
 }
 
+async function createPayPalClientToken() {
+  const accessToken = await getPayPalAccessToken();
+  return paypalApiRequest("POST", "/v1/identity/generate-token", {}, accessToken);
+}
+
 function getRequiredCheckoutKeys() {
   return ["customerName", "email", "phone", "address", "city", "state", "pincode", "items"];
 }
@@ -3910,8 +3915,8 @@ function checkoutPage(user = null) {
             <div class="cr-co-express-pay">
               <p class="eyebrow">Fastest option</p>
               <h2>Advance PayPal Checkout</h2>
-              <p>Pay now by entering your card details in PayPal Checkout. You do not need to fill the location details on this page.</p>
-              <button type="button" class="cr-co-express-btn" data-paypal-advance-start ${paypalReady ? "" : "disabled"}>Pay now with card</button>
+              <p>Pay now by entering only your card details. No billing address, shipping address, or location form is needed on this checkout page.</p>
+              <button type="button" class="cr-co-express-btn" data-paypal-advance-start ${paypalReady ? "" : "disabled"}>Pay directly by card</button>
             </div>
             <h2>Shipping Details</h2>
             <label>Full name<input name="customerName" value="${escapeHtml(user?.name || "")}" required minlength="2"></label>
@@ -3952,7 +3957,7 @@ function checkoutPage(user = null) {
             <h2>Payment Method</h2>
             <p class="mp-verify-status" data-mp-verify-status></p>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="cod" checked><span>Cash on Delivery</span></label>
-            <label class="cr-co-pay-option cr-co-advance-paypal"><input type="radio" name="pay" value="paypal_advance" ${paypalReady ? "" : "disabled"}><span>Advance Payment — PayPal Checkout${paypalReady ? "" : " (Unavailable)"}<small>Skip the location form here. Pay the full amount now by entering card details in PayPal Checkout.</small></span></label>
+            <label class="cr-co-pay-option cr-co-advance-paypal"><input type="radio" name="pay" value="paypal_advance" ${paypalReady ? "" : "disabled"}><span>Advance Payment — Direct Card${paypalReady ? "" : " (Unavailable)"}<small>No billing address or location fields on this page — only card number, expiry, and CVV.</small></span></label>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="wise"><span>Wise (Bank Transfer)</span></label>
             <div class="mp-wise-box" data-mp-wise hidden>
               <p><strong>Wise bank transfer instructions</strong></p>
@@ -3966,8 +3971,16 @@ function checkoutPage(user = null) {
 
           <section class="cr-co-step" data-step-body="3">
             <h2>Review & Place Order</h2>
-            <p class="cr-co-review-note">Confirm your details and place the order.</p>
+            <p class="cr-co-review-note">For advance card payment, enter only card number, expiry, and CVV below. Billing/location details are not required on this page.</p>
             <div class="cr-co-paypal-wrap" data-paypal-button-wrap hidden>
+              <div class="cr-co-card-fields" data-paypal-card-fields hidden>
+                <label>Card number<div class="cr-co-card-field" data-paypal-card-number></div></label>
+                <div class="cr-co-card-grid">
+                  <label>Expiry date<div class="cr-co-card-field" data-paypal-card-expiry></div></label>
+                  <label>CVV<div class="cr-co-card-field" data-paypal-card-cvv></div></label>
+                </div>
+                <button type="button" class="cr-co-card-submit" data-paypal-card-submit>Pay by card now</button>
+              </div>
               <div data-paypal-button></div>
             </div>
             <div class="cr-co-actions">
@@ -6596,6 +6609,21 @@ async function handleRequest(req, res) {
       return;
     } catch (error) {
       json(res, 400, { error: error.message || "Could not create order" });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/payment/paypal/client-token") {
+    try {
+      if (!paypalConfigured()) {
+        json(res, 503, { error: "PayPal not configured" });
+        return;
+      }
+      const token = await createPayPalClientToken();
+      json(res, 200, { ok: true, clientToken: token && token.client_token ? token.client_token : "" });
+      return;
+    } catch (error) {
+      json(res, 400, { error: normalizePayPalError(error) || "Could not create PayPal client token" });
       return;
     }
   }
