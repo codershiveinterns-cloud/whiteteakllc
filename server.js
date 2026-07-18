@@ -813,19 +813,20 @@ function verifyRazorpaySignature(orderId, paymentId, signature) {
 
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || "";
 const PAYPAL_SECRET = process.env.PAYPAL_SECRET || "";
+const PAYPAL_MODE = String(process.env.PAYPAL_MODE || process.env.PAYPAL_ENV || "live").trim().toLowerCase() === "sandbox" ? "sandbox" : "live";
 
 function paypalConfigured() {
   return Boolean(PAYPAL_CLIENT_ID && PAYPAL_SECRET);
 }
 
 function getPayPalBaseUrl() {
-  return "https://api-m.paypal.com";
+  return PAYPAL_MODE === "sandbox" ? "https://api-m.sandbox.paypal.com" : "https://api-m.paypal.com";
 }
 
 function normalizePayPalError(error) {
   const message = String((error && error.message) || error || "");
   if (/invalid_client|client authentication failed|auth error|unauthorized/i.test(message)) {
-    return "PayPal rejected the merchant credentials. Update PAYPAL_CLIENT_ID and PAYPAL_SECRET in the live deployment environment with matching Live API credentials.";
+    return `PayPal rejected the merchant credentials. Update PAYPAL_CLIENT_ID and PAYPAL_SECRET with matching ${PAYPAL_MODE === "sandbox" ? "Sandbox" : "Live"} API credentials, or set PAYPAL_MODE=${PAYPAL_MODE === "sandbox" ? "live" : "sandbox"} if these keys are for the other environment.`;
   }
   if (/not configured|client id missing|keys not configured/i.test(message)) {
     return "PayPal is not configured on this deployment. Add PAYPAL_CLIENT_ID and PAYPAL_SECRET in the deployment environment.";
@@ -6224,7 +6225,7 @@ async function handleRequest(req, res) {
       PAYPAL_SECRET_set: Boolean(process.env.PAYPAL_SECRET),
       paypal_configured: paypalConfigured(),
       paypal_base_url: getPayPalBaseUrl(),
-      paypal_mode: "live",
+      paypal_mode: PAYPAL_MODE,
       FIREBASE_SERVICE_ACCOUNT_set: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT),
       FIREBASE_PROJECT_ID_set: Boolean(process.env.FIREBASE_PROJECT_ID),
       firebase_mirror_enabled: Boolean(fbMirror && fbMirror.isEnabled && fbMirror.isEnabled()),
