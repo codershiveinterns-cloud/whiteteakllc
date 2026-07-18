@@ -164,7 +164,7 @@
 
     if (!cart.length) {
       itemsNode.innerHTML = `<div class="empty-panel">Your cart is empty. Add products before checking out.</div>`;
-      form.querySelector("button").disabled = true;
+      form.querySelectorAll("button, input[type=submit]").forEach((btn) => { btn.disabled = true; });
       return;
     }
 
@@ -176,6 +176,8 @@
     `).join("");
 
     form.addEventListener("submit", async (event) => {
+      const selectedPay = (form.querySelector('input[name=pay]:checked') || {}).value || "cod";
+      if (selectedPay && selectedPay !== "cod") return;
       event.preventDefault();
       messageNode.textContent = "Placing your order...";
 
@@ -204,7 +206,7 @@
           throw new Error(result.error || "Could not place order");
         }
         writeCart([]);
-        window.location.href = `/order/${encodeURIComponent(result.orderCode)}`;
+        window.location.href = `/order-success/${encodeURIComponent(result.orderCode)}`;
       } catch (error) {
         messageNode.textContent = error.message;
       }
@@ -767,6 +769,7 @@
         var cur = document.querySelector(".cr-co-step.is-active");
         var n = cur ? Number(cur.getAttribute("data-step-body")) : 1;
         show(Math.min(n + 1, 3));
+        document.dispatchEvent(new CustomEvent("cr:checkout-step", { detail: { step: Math.min(n + 1, 3) } }));
       });
     });
     document.querySelectorAll("[data-cr-back]").forEach(function (btn) {
@@ -774,6 +777,7 @@
         var cur = document.querySelector(".cr-co-step.is-active");
         var n = cur ? Number(cur.getAttribute("data-step-body")) : 1;
         show(Math.max(n - 1, 1));
+        document.dispatchEvent(new CustomEvent("cr:checkout-step", { detail: { step: Math.max(n - 1, 1) } }));
       });
     });
   })();
@@ -1139,10 +1143,12 @@
     // Block checkout submit / payment until address is set
     var checkoutForm = document.querySelector("[data-checkout-form]");
     if (checkoutForm) {
-      if (!hasAddress()) {
-        setTimeout(openDialog, 250);
-      }
+      // Do not auto-open the address dialog on checkout: advance PayPal can be
+      // paid with card details only, and COD/Wise still gate when used.
+
       checkoutForm.addEventListener("submit", function (e) {
+        var payVal = (checkoutForm.querySelector('input[name=pay]:checked') || {}).value || "cod";
+        if (payVal === "paypal_advance") return;
         if (!hasAddress()) {
           e.preventDefault();
           e.stopImmediatePropagation();
@@ -1152,6 +1158,8 @@
       // Also gate the "Continue to payment" / pay buttons (e.g. Stripe/PayPal/Wise stubs)
       document.querySelectorAll("[data-pay-btn], [data-continue-payment], [data-checkout-form] [data-cr-next]").forEach(function (btn) {
         btn.addEventListener("click", function (e) {
+          var payVal = (checkoutForm.querySelector('input[name=pay]:checked') || {}).value || "cod";
+          if (payVal === "paypal_advance") return;
           if (!hasAddress()) {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -1314,6 +1322,7 @@
     var checkoutMessage = shell.querySelector("[data-checkout-message]");
     var paypalRendered = false;
     var paypalLoading = null;
+    var paypalRendering = false;
     var mobilePayPalMq = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
     var paypalResizeTimer = null;
     var paypalRenderTimer = null;
@@ -1326,6 +1335,9 @@
     }
     function getPayVal() {
       return (form.querySelector('input[name=pay]:checked') || {}).value || "cod";
+    }
+    function isPayPalPayVal(payVal) {
+      return payVal === "paypal" || payVal === "paypal_advance";
     }
     function getCheckoutOrder() {
       var data = Object.fromEntries(new FormData(form).entries());
@@ -1357,10 +1369,23 @@
       var active = shell.querySelector(".cr-co-step.is-active");
       return !!(active && active.getAttribute("data-step-body") === "3");
     }
+    function showCheckoutStep(n) {
+      var stepItems = shell.querySelectorAll("[data-cr-steps] li");
+      var bodies = shell.querySelectorAll("[data-step-body]");
+      stepItems.forEach(function (li) {
+        var s = Number(li.getAttribute("data-step"));
+        li.classList.toggle("is-active", s === n);
+        li.classList.toggle("is-done", s < n);
+      });
+      bodies.forEach(function (b) {
+        b.classList.toggle("is-active", Number(b.getAttribute("data-step-body")) === n);
+      });
+      document.dispatchEvent(new CustomEvent("cr:checkout-step", { detail: { step: n } }));
+    }
     function schedulePayPalRender() {
       clearTimeout(paypalRenderTimer);
       paypalRenderTimer = setTimeout(function () {
-        if (!isReviewStepActive() || getPayVal() !== "paypal" || !paypalReady || !paypalWrap) return;
+        if (!isReviewStepActive() || !isPayPalPayVal(getPayVal()) || !paypalReady || !paypalWrap) return;
         paypalWrap.hidden = false;
         renderPayPalButtons();
       }, isMobileCheckout() ? 120 : 0);
@@ -1368,7 +1393,7 @@
     function togglePaymentUi() {
       var payVal = getPayVal();
       if (wise) wise.hidden = payVal !== "wise";
-      var usePayPal = payVal === "paypal" && paypalReady;
+      var usePayPal = isPayPalPayVal(payVal) && paypalReady;
       if (paypalWrap) paypalWrap.hidden = !usePayPal;
       if (submitButton) submitButton.hidden = usePayPal;
       if (usePayPal) schedulePayPalRender();
@@ -1379,7 +1404,7 @@
       paypalLoading = new Promise(function (resolve, reject) {
         if (!paypalClientId) { reject(new Error("PayPal client ID missing")); return; }
         var s = document.createElement("script");
-        s.src = "https://www.paypal.com/sdk/js?client-id=" + encodeURIComponent(paypalClientId) + "&currency=USD&intent=capture";
+        s.src = "https://www.paypal.com/sdk/js?client-id=" + encodeURIComponent(paypalClientId) + "&currency=USD&intent=capture&components=buttons&enable-funding=card";
         s.onload = function () { resolve(); };
         s.onerror = function () { reject(new Error("Failed to load PayPal SDK")); };
         document.head.appendChild(s);
@@ -1387,12 +1412,18 @@
       return paypalLoading;
     }
     function renderPayPalButtons() {
-      if (!paypalReady || !paypalButton || paypalRendered) return;
+      if (!paypalReady || !paypalButton || paypalRendered || paypalRendering) return;
+      if (!isVisible(paypalWrap)) return;
+      paypalRendering = true;
+      setStatus("Loading PayPal…", false);
       loadPayPalSdk().then(function () {
-        if (!window.paypal || paypalRendered) return;
-        window.paypal.Buttons({
+        if (!window.paypal) throw new Error("Could not load PayPal");
+        if (paypalRendered) return;
+        paypalButton.innerHTML = "";
+        return window.paypal.Buttons({
+          fundingSource: window.paypal.FUNDING.CARD,
           createOrder: function () {
-            if (form && !form.reportValidity()) {
+            if (getPayVal() !== "paypal_advance" && form && !form.reportValidity()) {
               setStatus("Please complete the highlighted checkout fields before PayPal payment.", true);
               return Promise.reject(new Error("Checkout details are incomplete"));
             }
@@ -1401,6 +1432,7 @@
               setStatus("Your cart is empty.", true);
               return Promise.reject(new Error("Your cart is empty"));
             }
+            setStatus("Opening PayPal checkout…", false);
             return fetch("/api/payment/paypal/create-order", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1415,6 +1447,7 @@
           },
           onApprove: function (data) {
             var order = getCheckoutOrder();
+            setStatus("Confirming PayPal payment…", false);
             return fetch("/api/payment/paypal/capture-order", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1437,17 +1470,34 @@
             setStatus((err && err.message) || "PayPal payment failed", true);
           }
         }).render(paypalButton);
+      }).then(function () {
         paypalRendered = true;
+        paypalRendering = false;
+        setStatus("");
       }).catch(function (err) {
+        paypalRendering = false;
+        paypalRendered = false;
         setStatus(err.message || "Could not load PayPal", true);
       });
     }
     shell.addEventListener("change", function (e) {
-      if (e.target && e.target.name === "pay") togglePaymentUi();
+      if (e.target && e.target.name === "pay") {
+        if (e.target.value === "paypal_advance") showCheckoutStep(3);
+        togglePaymentUi();
+      }
     });
     var form = shell.querySelector("[data-checkout-form]");
     if (!form) return;
     togglePaymentUi();
+    var advanceStart = shell.querySelector("[data-paypal-advance-start]");
+    if (advanceStart) {
+      advanceStart.addEventListener("click", function () {
+        var paypalInput = form.querySelector('input[name=pay][value="paypal_advance"]');
+        if (paypalInput) paypalInput.checked = true;
+        showCheckoutStep(3);
+        togglePaymentUi();
+      });
+    }
     shell.querySelectorAll("[data-cr-next], [data-cr-back]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         setTimeout(togglePaymentUi, 0);
@@ -1465,10 +1515,10 @@
     form.addEventListener("submit", function (e) {
       var payVal = getPayVal();
       if (payVal === "cod") return;
-      if (payVal === "paypal") {
+      if (isPayPalPayVal(payVal)) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        setStatus("Use the PayPal button to complete payment.", true);
+        setStatus("Use the PayPal button to complete advance payment.", true);
         return;
       }
       e.preventDefault(); e.stopPropagation();

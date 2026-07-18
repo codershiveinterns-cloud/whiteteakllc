@@ -2874,6 +2874,12 @@ body.mp-nav-open { overflow: hidden; }
 .mp-verify-status { margin:8px 0 0; min-height:1.1em; color:#10b981; font-weight:600; }
 .mp-verify-status.is-error { color:var(--danger); }
 .mp-wise-box { background:#fff7e6; border:1px solid #ffd591; border-radius:10px; padding:14px; margin-top:8px; }
+.cr-co-express-pay { margin: 0 0 18px; padding: 18px; border: 1px solid #bfdbfe; border-radius: 16px; background: linear-gradient(135deg, #eff6ff, #ffffff); }
+.cr-co-express-pay h2 { margin: 4px 0 6px; }
+.cr-co-express-pay p { margin: 0 0 12px; color: #4b5563; }
+.cr-co-express-btn { border: 0; border-radius: 999px; padding: 12px 20px; background: #003087; color: #fff; font-weight: 800; cursor: pointer; box-shadow: 0 10px 22px rgba(0, 48, 135, 0.18); }
+.cr-co-express-btn:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
+.cr-co-advance-paypal small { display:block; margin-top:3px; color:#6b7280; font-weight:500; line-height:1.35; }
 
 /* hide legacy site-footer (replaced by the WhiteTeakLLC footer site-wide) */
 body .site-footer { display:none !important; }
@@ -3469,6 +3475,17 @@ body.theme-plum .cr-co-form, body.theme-plum .cr-co-summary-collapse,
 body.theme-storm .cr-co-form, body.theme-storm .cr-co-summary-collapse,
 body.theme-obsidian .cr-co-form, body.theme-obsidian .cr-co-summary-collapse,
 body.theme-carbon .cr-co-form, body.theme-carbon .cr-co-summary-collapse { background: var(--surface); border-color: var(--line); color: var(--text); }
+
+body.theme-midnight .cr-co-express-pay, body.theme-charcoal .cr-co-express-pay,
+body.theme-navy .cr-co-express-pay, body.theme-slate .cr-co-express-pay,
+body.theme-espresso .cr-co-express-pay, body.theme-forest .cr-co-express-pay,
+body.theme-plum .cr-co-express-pay, body.theme-storm .cr-co-express-pay,
+body.theme-obsidian .cr-co-express-pay, body.theme-carbon .cr-co-express-pay { background: var(--surface-alt); border-color: var(--line); color: var(--text); }
+body.theme-midnight .cr-co-express-pay p, body.theme-charcoal .cr-co-express-pay p,
+body.theme-navy .cr-co-express-pay p, body.theme-slate .cr-co-express-pay p,
+body.theme-espresso .cr-co-express-pay p, body.theme-forest .cr-co-express-pay p,
+body.theme-plum .cr-co-express-pay p, body.theme-storm .cr-co-express-pay p,
+body.theme-obsidian .cr-co-express-pay p, body.theme-carbon .cr-co-express-pay p { color: var(--text-muted); }
 
 body.theme-midnight .cr-co-step label, body.theme-charcoal .cr-co-step label,
 body.theme-navy .cr-co-step label, body.theme-slate .cr-co-step label,

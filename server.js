@@ -822,6 +822,17 @@ function getPayPalBaseUrl() {
   return "https://api-m.paypal.com";
 }
 
+function normalizePayPalError(error) {
+  const message = String((error && error.message) || error || "");
+  if (/invalid_client|client authentication failed|auth error|unauthorized/i.test(message)) {
+    return "PayPal rejected the merchant credentials. Update PAYPAL_CLIENT_ID and PAYPAL_SECRET in the live deployment environment with matching Live API credentials.";
+  }
+  if (/not configured|client id missing|keys not configured/i.test(message)) {
+    return "PayPal is not configured on this deployment. Add PAYPAL_CLIENT_ID and PAYPAL_SECRET in the deployment environment.";
+  }
+  return message || "PayPal payment failed";
+}
+
 function paypalApiRequest(method, apiPath, payload = null, accessToken = "") {
   return new Promise((resolve, reject) => {
     if (!paypalConfigured()) {
@@ -855,7 +866,10 @@ function paypalApiRequest(method, apiPath, payload = null, accessToken = "") {
           if (res.statusCode >= 200 && res.statusCode < 300) {
             resolve(parsed);
           } else {
-            reject(new Error(parsed?.message || parsed?.error_description || `PayPal error (${res.statusCode})`));
+            const detail = parsed?.details && Array.isArray(parsed.details) && parsed.details[0]
+              ? [parsed.details[0].issue, parsed.details[0].description].filter(Boolean).join(": ")
+              : "";
+            reject(new Error(parsed?.message || parsed?.error_description || parsed?.error || detail || `PayPal error (${res.statusCode})`));
           }
         } catch (err) {
           reject(err);
@@ -896,7 +910,7 @@ async function getPayPalAccessToken() {
           if (res.statusCode >= 200 && res.statusCode < 300 && parsed.access_token) {
             resolve(parsed.access_token);
           } else {
-            reject(new Error(parsed?.error_description || parsed?.message || `PayPal auth error (${res.statusCode})`));
+            reject(new Error(parsed?.error_description || parsed?.message || parsed?.error || `PayPal auth error (${res.statusCode})`));
           }
         } catch (err) {
           reject(err);
@@ -921,7 +935,16 @@ async function createPayPalOrder(total) {
           value
         }
       }
-    ]
+    ],
+    payment_source: {
+      paypal: {
+        experience_context: {
+          landing_page: "BILLING",
+          shipping_preference: "NO_SHIPPING",
+          user_action: "PAY_NOW"
+        }
+      }
+    }
   }, accessToken);
 }
 
@@ -954,6 +977,33 @@ function hydrateOrderItems(itemsInput) {
 
 function computeOrderTotal(items) {
   return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+}
+
+function buildAdvancePayPalOrder(order, capture, currentUser = null) {
+  const payer = capture && capture.payer ? capture.payer : {};
+  const payerName = payer.name ? [payer.name.given_name, payer.name.surname].filter(Boolean).join(" ").trim() : "";
+  const payerPhone = payer.phone && payer.phone.phone_number ? payer.phone.phone_number.national_number : "";
+  const purchaseUnit = Array.isArray(capture && capture.purchase_units) ? capture.purchase_units[0] : null;
+  const shipping = purchaseUnit && purchaseUnit.shipping ? purchaseUnit.shipping : {};
+  const shippingAddress = shipping.address || {};
+  const addressText = [
+    shippingAddress.address_line_1,
+    shippingAddress.address_line_2,
+    shippingAddress.admin_area_2,
+    shippingAddress.admin_area_1,
+    shippingAddress.postal_code,
+    shippingAddress.country_code
+  ].filter(Boolean).join(", ");
+  return {
+    customerName: order.customerName || (shipping.name && shipping.name.full_name) || payerName || (currentUser && currentUser.name) || "PayPal Customer",
+    email: order.email || payer.email_address || (currentUser && currentUser.email) || "paypal-customer@whiteteakllc.com",
+    phone: order.phone || payerPhone || "Provided through PayPal",
+    address: order.address || addressText || "Provided through PayPal advance checkout",
+    city: order.city || shippingAddress.admin_area_2 || "Provided through PayPal",
+    state: order.state || shippingAddress.admin_area_1 || "Provided through PayPal",
+    pincode: order.pincode || shippingAddress.postal_code || "N/A",
+    items: order.items
+  };
 }
 
 function createOrderCode() {
@@ -3841,7 +3891,7 @@ function checkoutPage(user = null) {
         <header class="cr-co-header">
           <h1>Checkout</h1>
         </header>
-        ${!rzpReady ? `<div class="eh-banner eh-banner-warn" role="status">Test mode — add real Razorpay keys to .env to enable live payments.</div>` : `<div class="eh-banner eh-banner-info" role="status">Razorpay test mode is active. Use test cards only.</div>`}
+        ${!paypalReady ? `<div class="eh-banner eh-banner-warn" role="status">PayPal is unavailable until live PAYPAL_CLIENT_ID and PAYPAL_SECRET are set in the deployment environment.</div>` : ""}
         <div class="eh-banner eh-banner-error" id="eh-pay-error" hidden role="alert"></div>
 
         <ol class="cr-co-stepper" data-cr-steps>
@@ -3857,6 +3907,12 @@ function checkoutPage(user = null) {
 
         <form class="cr-co-form" data-checkout-form data-cr-form>
           <section class="cr-co-step is-active" data-step-body="1">
+            <div class="cr-co-express-pay">
+              <p class="eyebrow">Fastest option</p>
+              <h2>Advance PayPal Checkout</h2>
+              <p>Pay now by entering your card details in PayPal Checkout. You do not need to fill the location details on this page.</p>
+              <button type="button" class="cr-co-express-btn" data-paypal-advance-start ${paypalReady ? "" : "disabled"}>Pay now with card</button>
+            </div>
             <h2>Shipping Details</h2>
             <label>Full name<input name="customerName" value="${escapeHtml(user?.name || "")}" required minlength="2"></label>
             <label>Email<input type="email" name="email" value="${escapeHtml(user?.email || "")}" required></label>
@@ -3896,8 +3952,7 @@ function checkoutPage(user = null) {
             <h2>Payment Method</h2>
             <p class="mp-verify-status" data-mp-verify-status></p>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="cod" checked><span>Cash on Delivery</span></label>
-            <label class="cr-co-pay-option"><input type="radio" name="pay" value="stripe" ${rzpReady ? "" : "disabled"}><span>Card${rzpReady ? "" : " (Unavailable)"}</span></label>
-            <label class="cr-co-pay-option"><input type="radio" name="pay" value="paypal" ${paypalReady ? "" : "disabled"}><span>PayPal${paypalReady ? "" : " (Unavailable)"}</span></label>
+            <label class="cr-co-pay-option cr-co-advance-paypal"><input type="radio" name="pay" value="paypal_advance" ${paypalReady ? "" : "disabled"}><span>Advance Payment — PayPal Checkout${paypalReady ? "" : " (Unavailable)"}<small>Skip the location form here. Pay the full amount now by entering card details in PayPal Checkout.</small></span></label>
             <label class="cr-co-pay-option"><input type="radio" name="pay" value="wise"><span>Wise (Bank Transfer)</span></label>
             <div class="mp-wise-box" data-mp-wise hidden>
               <p><strong>Wise bank transfer instructions</strong></p>
@@ -4013,6 +4068,14 @@ function orderSuccessPage(code, user = null) {
 function authPage({ message = "", email = "", verified = false, error = "", next = "" } = {}, user = null) {
   const nextNotice = next ? `<div class="eo-auth-banner">Please login to access your ${/checkout/i.test(next) ? "checkout" : "cart"}.</div>` : "";
   const loginAction = next ? `/auth/login?next=${encodeURIComponent(next)}` : "/auth/login";
+  const showVerifyPrompt = Boolean(email && /otp|verify|verification/i.test(`${message} ${error}`));
+  const verifyPrompt = showVerifyPrompt ? `
+              <form class="eo-auth-form" method="POST" action="/auth/verify-otp" style="margin:14px 0;padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#fafafa">
+                <input type="hidden" name="email" value="${escapeHtml(email)}">
+                <label>Enter OTP<input type="text" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required></label>
+                <button class="eo-auth-btn" type="submit">Verify account</button>
+                <p class="eo-auth-foot" style="margin-top:10px">Need a new code? <a href="/auth/resend-otp?email=${encodeURIComponent(email)}">Resend OTP</a></p>
+              </form>` : "";
   return layout({
     title: "Login – WHITETEAKLLC",
     description: "Sign in to your WHITETEAKLLC account to access your cart, orders, and saved items.",
@@ -4039,7 +4102,8 @@ function authPage({ message = "", email = "", verified = false, error = "", next
               ${nextNotice}
               ${verified ? `<div class="eo-auth-banner eo-auth-success">Signup successful — you can login now.</div>` : ""}
               ${message ? `<div class="eo-auth-banner">${escapeHtml(message)}</div>` : ""}
-              ${error ? `<div class="eo-auth-banner eo-auth-error">${error}</div>` : ""}
+              ${error ? `<div class="eo-auth-banner eo-auth-error">${escapeHtml(error)}</div>` : ""}
+              ${verifyPrompt}
               <form class="eo-auth-form" method="POST" action="${loginAction}">
                 <label>Email<input type="email" name="email" value="${escapeHtml(email)}" required autocomplete="email"></label>
                 <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
@@ -6143,6 +6207,11 @@ async function handleRequest(req, res) {
       SMTP_FROM_set: Boolean(process.env.SMTP_FROM),
       SMTP_REPLY_TO_set: Boolean(process.env.SMTP_REPLY_TO),
       SMTP_TLS_STRICT: String(process.env.SMTP_TLS_STRICT || ""),
+      PAYPAL_CLIENT_ID_set: Boolean(process.env.PAYPAL_CLIENT_ID),
+      PAYPAL_SECRET_set: Boolean(process.env.PAYPAL_SECRET),
+      paypal_configured: paypalConfigured(),
+      paypal_base_url: getPayPalBaseUrl(),
+      paypal_mode: "live",
       FIREBASE_SERVICE_ACCOUNT_set: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT),
       FIREBASE_PROJECT_ID_set: Boolean(process.env.FIREBASE_PROJECT_ID),
       firebase_mirror_enabled: Boolean(fbMirror && fbMirror.isEnabled && fbMirror.isEnabled()),
@@ -6250,7 +6319,9 @@ async function handleRequest(req, res) {
     const target = await dataLayer.getUserByEmail(email);
     if (!target) { back("User not found.", true); return; }
     await dataLayer.updateUserPassword(email, password);
-    back(`Password reset for ${email}. Share the new password securely and ask the user to change it after login.`);
+    await dataLayer.markUserVerified(email);
+    try { db.prepare("UPDATE otp_codes SET consumed = 1 WHERE email = ? AND consumed = 0").run(email); saveDbSafe("admin-reset-password"); } catch (_) { /* OTP cleanup is best-effort */ }
+    back(`Password reset and account approved for ${email}. Share the new password securely and ask the user to log in.`);
     return;
   }
 
@@ -6388,7 +6459,8 @@ async function handleRequest(req, res) {
       return;
     }
     await dataLayer.updateUserPassword(email, password);
-    res.writeHead(302, { Location: `/login?message=${encodeURIComponent("Password reset successfully. Please log in with your new password.")}&email=${encodeURIComponent(email)}` });
+    await dataLayer.markUserVerified(email);
+    res.writeHead(302, { Location: `/login?message=${encodeURIComponent("Password reset successfully. Your account is verified; please log in with your new password.")}&email=${encodeURIComponent(email)}` });
     res.end();
     return;
   }
@@ -6536,14 +6608,17 @@ async function handleRequest(req, res) {
       }
       const payload = JSON.parse(await readBody(req) || "{}");
       const order = payload.order || payload;
-      validateCheckoutPayload(order);
+      if (!order || !Array.isArray(order.items) || !order.items.length) {
+        json(res, 400, { error: "Your cart is empty" });
+        return;
+      }
       const items = hydrateOrderItems(order.items);
       const total = computeOrderTotal(items);
       const paypalOrder = await createPayPalOrder(total);
       json(res, 200, { ok: true, paypalOrderId: paypalOrder.id });
       return;
     } catch (error) {
-      json(res, 400, { error: error.message || "Could not create PayPal order" });
+      json(res, 400, { error: normalizePayPalError(error) || "Could not create PayPal order" });
       return;
     }
   }
@@ -6561,7 +6636,10 @@ async function handleRequest(req, res) {
         json(res, 400, { error: "Missing paypalOrderId" });
         return;
       }
-      validateCheckoutPayload(order);
+      if (!order || !Array.isArray(order.items) || !order.items.length) {
+        json(res, 400, { error: "Your cart is empty" });
+        return;
+      }
       const capture = await capturePayPalOrder(paypalOrderId);
       const purchaseUnit = Array.isArray(capture.purchase_units) ? capture.purchase_units[0] : null;
       const payments = purchaseUnit && purchaseUnit.payments ? purchaseUnit.payments : null;
@@ -6586,7 +6664,8 @@ async function handleRequest(req, res) {
         json(res, 200, { ok: true, orderCode: existing.order_code, redirect: `/order-success/${encodeURIComponent(existing.order_code)}` });
         return;
       }
-      const saved = await persistOrder(order, items, "Paid", "paypal", {
+      const checkoutOrder = buildAdvancePayPalOrder(order, capture, currentUser);
+      const saved = await persistOrder(checkoutOrder, items, "Paid", "paypal_advance", {
         paypalOrderId,
         paypalCaptureId: captureEntry && captureEntry.id ? captureEntry.id : null,
         accountEmail: currentUser && currentUser.email
@@ -6595,7 +6674,7 @@ async function handleRequest(req, res) {
       json(res, 201, { ok: true, orderCode: saved.orderCode, redirect: `/order-success/${encodeURIComponent(saved.orderCode)}` });
       return;
     } catch (error) {
-      json(res, 400, { error: error.message || "Could not capture PayPal order" });
+      json(res, 400, { error: normalizePayPalError(error) || "Could not capture PayPal order" });
       return;
     }
   }
