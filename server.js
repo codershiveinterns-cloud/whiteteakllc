@@ -50,6 +50,7 @@ let db;
 let dataLayer;
 let _initStarted = false;
 let _initPromise = null;
+let _commerceBackfilled = false;
 
 function initialize() {
   if (_initPromise) return _initPromise;
@@ -189,15 +190,105 @@ db.exec(`
   );
 `);
 
+  runCommerceMigrations();
   seedProductsIfNeeded();
   fixProductCategoryImageMismatch();
 }
 
 function ensureProductColumn(columnName, sqlType) {
-  const columns = db.prepare("PRAGMA table_info(products)").all();
-  if (!columns.some((column) => column.name === columnName)) {
-    db.exec(`ALTER TABLE products ADD COLUMN ${columnName} ${sqlType}`);
+  ensureTableColumn("products", columnName, sqlType);
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function parseJsonSafe(value, fallback) {
+  try {
+    if (value === undefined || value === null || value === "") return fallback;
+    return JSON.parse(value);
+  } catch {
+    return fallback;
   }
+}
+
+function ensureTableColumn(tableName, columnName, sqlType) {
+  const safeTable = String(tableName || "").replace(/[^a-zA-Z0-9_]/g, "");
+  const safeColumn = String(columnName || "").replace(/[^a-zA-Z0-9_]/g, "");
+  if (!safeTable || !safeColumn) return;
+  const columns = db.prepare(`PRAGMA table_info(${safeTable})`).all();
+  if (!columns.some((column) => column.name === safeColumn)) {
+    db.exec(`ALTER TABLE ${safeTable} ADD COLUMN ${safeColumn} ${sqlType}`);
+  }
+}
+
+function runMigration(id, runner) {
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);`);
+  const key = String(id || "").trim();
+  if (!key) return;
+  const existing = db.prepare("SELECT id FROM schema_migrations WHERE id = ?").get(key);
+  if (existing) return;
+  runner();
+  db.prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(key, nowIso());
+  saveDbSafe(`migration-${key}`);
+}
+
+function createPublicToken(prefix = "tok") {
+  const clean = String(prefix || "tok").replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "tok";
+  return `${clean}_${Date.now().toString(36)}_${crypto.randomBytes(12).toString("hex")}`;
+}
+
+function runCommerceMigrations() {
+  runMigration("commerce-core-20260727", () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS customers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT UNIQUE, email TEXT UNIQUE NOT NULL, first_name TEXT, last_name TEXT, name TEXT, phone TEXT,
+        accepts_marketing INTEGER NOT NULL DEFAULT 0, tags_json TEXT NOT NULL DEFAULT '[]', notes TEXT, status TEXT NOT NULL DEFAULT 'active',
+        total_spent INTEGER NOT NULL DEFAULT 0, orders_count INTEGER NOT NULL DEFAULT 0, last_order_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS customer_addresses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, customer_id INTEGER NOT NULL, user_email TEXT, name TEXT, phone TEXT, address1 TEXT NOT NULL, address2 TEXT,
+        city TEXT NOT NULL, state TEXT NOT NULL, country TEXT NOT NULL DEFAULT 'India', pincode TEXT NOT NULL, is_default_shipping INTEGER NOT NULL DEFAULT 0,
+        is_default_billing INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS carts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, cart_token TEXT UNIQUE NOT NULL, user_email TEXT, customer_id INTEGER, status TEXT NOT NULL DEFAULT 'active',
+        currency TEXT NOT NULL DEFAULT 'USD', subtotal INTEGER NOT NULL DEFAULT 0, discount_total INTEGER NOT NULL DEFAULT 0, shipping_total INTEGER NOT NULL DEFAULT 0,
+        tax_total INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, expires_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS cart_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, cart_id INTEGER NOT NULL, product_id INTEGER NOT NULL, variant_id INTEGER, sku TEXT, title TEXT NOT NULL, unit_price INTEGER NOT NULL,
+        quantity INTEGER NOT NULL, line_total INTEGER NOT NULL, properties_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS order_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL, order_code TEXT NOT NULL, product_id INTEGER, variant_id INTEGER, sku TEXT, title TEXT NOT NULL,
+        vendor TEXT, product_type TEXT, unit_price INTEGER NOT NULL, compare_at_price INTEGER, quantity INTEGER NOT NULL, fulfilled_quantity INTEGER NOT NULL DEFAULT 0,
+        refunded_quantity INTEGER NOT NULL DEFAULT 0, discount_total INTEGER NOT NULL DEFAULT 0, tax_total INTEGER NOT NULL DEFAULT 0, line_total INTEGER NOT NULL, image TEXT,
+        properties_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email);
+      CREATE INDEX IF NOT EXISTS idx_customer_addresses_customer ON customer_addresses(customer_id);
+      CREATE INDEX IF NOT EXISTS idx_carts_token ON carts(cart_token);
+      CREATE INDEX IF NOT EXISTS idx_carts_user ON carts(user_email);
+      CREATE INDEX IF NOT EXISTS idx_cart_items_cart ON cart_items(cart_id);
+      CREATE INDEX IF NOT EXISTS idx_order_items_code ON order_items(order_code);
+      CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+      CREATE INDEX IF NOT EXISTS idx_products_slug ON products(slug);
+      CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+      CREATE INDEX IF NOT EXISTS idx_orders_code ON orders(order_code);
+      CREATE INDEX IF NOT EXISTS idx_orders_email ON orders(email);
+      CREATE INDEX IF NOT EXISTS idx_orders_account_email ON orders(account_email);
+      CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
+      CREATE INDEX IF NOT EXISTS idx_wishlists_user ON wishlists(user_email);
+      CREATE INDEX IF NOT EXISTS idx_product_reviews_product ON product_reviews(product_id);
+    `);
+    [
+      ["customer_id", "INTEGER"], ["cart_id", "INTEGER"], ["currency", "TEXT NOT NULL DEFAULT 'USD'"], ["subtotal", "INTEGER NOT NULL DEFAULT 0"],
+      ["discount_total", "INTEGER NOT NULL DEFAULT 0"], ["shipping_total", "INTEGER NOT NULL DEFAULT 0"], ["tax_total", "INTEGER NOT NULL DEFAULT 0"], ["grand_total", "INTEGER"],
+      ["financial_status", "TEXT NOT NULL DEFAULT 'pending'"], ["fulfillment_status", "TEXT NOT NULL DEFAULT 'unfulfilled'"], ["cancelled_at", "TEXT"], ["cancel_reason", "TEXT"],
+      ["billing_address_json", "TEXT NOT NULL DEFAULT '{}'"], ["shipping_address_json", "TEXT NOT NULL DEFAULT '{}'"], ["notes", "TEXT"], ["tags_json", "TEXT NOT NULL DEFAULT '[]'"], ["updated_at", "TEXT"]
+    ].forEach(([name, type]) => ensureTableColumn("orders", name, type));
+  });
 }
 
 function seedProductsIfNeeded() {
@@ -973,11 +1064,22 @@ function validateCheckoutPayload(payload) {
 
 function hydrateOrderItems(itemsInput) {
   return itemsInput.map((item) => {
-    const product = db.prepare("SELECT id, name, price, stock FROM products WHERE id = ?").get(item.id);
+    const product = db.prepare("SELECT id, slug, name, brand, category, price, original_price, stock, image FROM products WHERE id = ?").get(item.id);
     if (!product) throw new Error(`Product ${item.id} not found`);
     const quantity = Math.max(1, Number(item.quantity || 1));
     if (quantity > product.stock) throw new Error(`Only ${product.stock} units left for ${product.name}`);
-    return { id: product.id, name: product.name, price: product.price, quantity };
+    return {
+      id: product.id,
+      slug: product.slug,
+      name: product.name,
+      brand: product.brand,
+      category: product.category,
+      price: product.price,
+      original_price: product.original_price,
+      image: product.image,
+      quantity,
+      line_total: product.price * quantity
+    };
   });
 }
 
@@ -1101,55 +1203,224 @@ async function sendPaidInvoice(order, items) {
   return result;
 }
 
+
+function splitCustomerName(name = "") {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return { firstName: parts[0] || "", lastName: parts.slice(1).join(" ") };
+}
+
+function getCustomerByEmail(email) {
+  const normalized = normalizeOrderEmail(email);
+  if (!normalized) return null;
+  return db.prepare("SELECT * FROM customers WHERE email = ? OR user_email = ? LIMIT 1").get(normalized, normalized) || null;
+}
+
+function getOrCreateCustomer({ email, name = "", phone = "", userEmail = "", acceptsMarketing = 0, save = true } = {}) {
+  const normalized = normalizeOrderEmail(email || userEmail);
+  if (!normalized) return null;
+  const normalizedUserEmail = normalizeOrderEmail(userEmail || normalized);
+  const existing = getCustomerByEmail(normalized);
+  const now = nowIso();
+  const parsed = splitCustomerName(name || (existing && existing.name) || normalized);
+  if (existing) {
+    db.prepare("UPDATE customers SET user_email = COALESCE(NULLIF(user_email, ''), ?), name = COALESCE(NULLIF(name, ''), ?), first_name = COALESCE(NULLIF(first_name, ''), ?), last_name = COALESCE(NULLIF(last_name, ''), ?), phone = COALESCE(NULLIF(phone, ''), ?), accepts_marketing = CASE WHEN ? THEN 1 ELSE accepts_marketing END, updated_at = ? WHERE id = ?")
+      .run(normalizedUserEmail || normalized, name || normalized, parsed.firstName, parsed.lastName, phone || "", acceptsMarketing ? 1 : 0, now, existing.id);
+    if (save) saveDbSafe("customer-update");
+    return db.prepare("SELECT * FROM customers WHERE id = ?").get(existing.id);
+  }
+  const result = db.prepare("INSERT INTO customers (user_email, email, first_name, last_name, name, phone, accepts_marketing, tags_json, notes, status, total_spent, orders_count, last_order_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '', 'active', 0, 0, NULL, ?, ?)")
+    .run(normalizedUserEmail || normalized, normalized, parsed.firstName, parsed.lastName, name || normalized, phone || "", acceptsMarketing ? 1 : 0, now, now);
+  if (save) saveDbSafe("customer-create");
+  return db.prepare("SELECT * FROM customers WHERE id = ?").get(result.lastInsertRowid);
+}
+
+function listCustomerAddresses(customerId) {
+  if (!customerId) return [];
+  return db.prepare("SELECT * FROM customer_addresses WHERE customer_id = ? ORDER BY is_default_shipping DESC, id DESC").all(customerId);
+}
+
+function saveCustomerAddress(customerId, payload = {}, { makeDefault = true, save = true } = {}) {
+  if (!customerId) return null;
+  const now = nowIso();
+  const address1 = String(payload.address1 || payload.address || "").trim();
+  const city = String(payload.city || "").trim();
+  const state = String(payload.state || "").trim();
+  const pincode = String(payload.pincode || payload.pin || "").trim();
+  if (!address1 || !city || !state || !pincode) return null;
+  const country = String(payload.country || "India").trim() || "India";
+  const userEmail = normalizeOrderEmail(payload.userEmail || payload.email || "");
+  if (makeDefault) db.prepare("UPDATE customer_addresses SET is_default_shipping = 0, is_default_billing = 0, updated_at = ? WHERE customer_id = ?").run(now, customerId);
+  const result = db.prepare("INSERT INTO customer_addresses (customer_id, user_email, name, phone, address1, address2, city, state, country, pincode, is_default_shipping, is_default_billing, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(customerId, userEmail || null, payload.name || payload.customerName || "", payload.phone || "", address1, payload.address2 || "", city, state, country, pincode, makeDefault ? 1 : 0, makeDefault ? 1 : 0, now, now);
+  if (save) saveDbSafe("customer-address");
+  return db.prepare("SELECT * FROM customer_addresses WHERE id = ?").get(result.lastInsertRowid);
+}
+
+function updateCustomerStats(customerId, { save = true } = {}) {
+  if (!customerId) return;
+  const row = db.prepare("SELECT COALESCE(SUM(total), 0) AS total_spent, COUNT(*) AS orders_count, MAX(created_at) AS last_order_at FROM orders WHERE customer_id = ?").get(customerId) || {};
+  db.prepare("UPDATE customers SET total_spent = ?, orders_count = ?, last_order_at = ?, updated_at = ? WHERE id = ?")
+    .run(Number(row.total_spent || 0), Number(row.orders_count || 0), row.last_order_at || null, nowIso(), customerId);
+  if (save) saveDbSafe("customer-stats");
+}
+
+function deriveFinancialStatus(status) {
+  const st = String(status || "").toLowerCase();
+  if (st.includes("paid")) return "paid";
+  if (st.includes("cancel")) return "voided";
+  return "pending";
+}
+
+function insertOrderItems(orderId, orderCode, items, createdAt = nowIso()) {
+  const existing = db.prepare("SELECT COUNT(*) AS count FROM order_items WHERE order_code = ?").get(orderCode).count;
+  if (existing) return;
+  const insert = db.prepare("INSERT INTO order_items (order_id, order_code, product_id, variant_id, sku, title, vendor, product_type, unit_price, compare_at_price, quantity, fulfilled_quantity, refunded_quantity, discount_total, tax_total, line_total, image, properties_json, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, '{}', ?)");
+  for (const item of items || []) {
+    const qty = Math.max(1, Number(item.quantity || 1));
+    const price = Number(item.price || item.unit_price || 0);
+    const sku = item.slug || (item.id ? "product-" + item.id : "");
+    insert.run(orderId || 0, orderCode, item.id || item.product_id || null, sku, item.name || item.title || "Item", item.brand || item.vendor || "", item.category || item.product_type || "", price, item.original_price || item.compare_at_price || null, qty, Number(item.line_total || price * qty), item.image || "", createdAt);
+  }
+}
+
+function serializeOrderItems(order) {
+  if (!order || !order.order_code) return [];
+  try {
+    const rows = db.prepare("SELECT * FROM order_items WHERE order_code = ? ORDER BY id").all(order.order_code);
+    if (rows.length) return rows.map((row) => ({ id: row.product_id, product_id: row.product_id, name: row.title, title: row.title, price: row.unit_price, unit_price: row.unit_price, quantity: row.quantity, line_total: row.line_total, image: row.image, sku: row.sku, vendor: row.vendor, product_type: row.product_type }));
+  } catch { /* legacy or remote order */ }
+  return parseItems(order.items_json);
+}
+
+function findProductForCartItem(item = {}) {
+  const id = Number(item.id || item.productId || item.product_id || 0);
+  if (id) return db.prepare("SELECT id, slug, name, price, image, stock FROM products WHERE id = ?").get(id);
+  const slug = String(item.slug || item.sku || "").trim();
+  if (slug) return db.prepare("SELECT id, slug, name, price, image, stock FROM products WHERE slug = ?").get(slug);
+  return null;
+}
+
+function setCartCookie(res, cartToken) {
+  const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 45).toUTCString();
+  appendCookie(res, "wt_cart=" + encodeURIComponent(cartToken) + "; Path=/; SameSite=Lax; Expires=" + expires);
+}
+
+function recalculateCart(cartId) {
+  const row = db.prepare("SELECT COALESCE(SUM(line_total), 0) AS subtotal FROM cart_items WHERE cart_id = ?").get(cartId) || {};
+  const subtotal = Number(row.subtotal || 0);
+  const cart = db.prepare("SELECT discount_total, shipping_total, tax_total FROM carts WHERE id = ?").get(cartId) || {};
+  const total = Math.max(0, subtotal - Number(cart.discount_total || 0) + Number(cart.shipping_total || 0) + Number(cart.tax_total || 0));
+  db.prepare("UPDATE carts SET subtotal = ?, total = ?, updated_at = ? WHERE id = ?").run(subtotal, total, nowIso(), cartId);
+}
+
+function serializeCart(cartId) {
+  const cart = db.prepare("SELECT * FROM carts WHERE id = ?").get(cartId);
+  if (!cart) return { ok: true, cart: null, items: [] };
+  const items = db.prepare("SELECT ci.*, p.slug, p.image AS product_image, p.stock FROM cart_items ci LEFT JOIN products p ON p.id = ci.product_id WHERE ci.cart_id = ? ORDER BY ci.id").all(cartId)
+    .map((row) => ({ lineId: row.id, id: row.product_id, productId: row.product_id, slug: row.slug || row.sku || String(row.product_id), name: row.title, price: row.unit_price, image: row.product_image || row.image || "", quantity: row.quantity, lineTotal: row.line_total, stock: row.stock }));
+  return { ok: true, cart: { ...cart, itemCount: items.reduce((sum, item) => sum + Number(item.quantity || 0), 0) }, items };
+}
+
+function getOrCreateCart(req, res, currentUser = null) {
+  const cookies = parseCookies(req);
+  const token = String(cookies.wt_cart || "").trim();
+  const userEmail = normalizeOrderEmail(currentUser && currentUser.email);
+  let cart = token ? db.prepare("SELECT * FROM carts WHERE cart_token = ? AND status = 'active'").get(token) : null;
+  if (!cart && userEmail) cart = db.prepare("SELECT * FROM carts WHERE user_email = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(userEmail);
+  if (cart) {
+    if (userEmail && !cart.user_email) {
+      const customer = getOrCreateCustomer({ email: userEmail, name: currentUser.name || userEmail, userEmail, save: false });
+      db.prepare("UPDATE carts SET user_email = ?, customer_id = ?, updated_at = ? WHERE id = ?").run(userEmail, customer ? customer.id : null, nowIso(), cart.id);
+      saveDbSafe("cart-claim");
+      cart = db.prepare("SELECT * FROM carts WHERE id = ?").get(cart.id);
+    }
+    setCartCookie(res, cart.cart_token);
+    return cart;
+  }
+  const customer = userEmail ? getOrCreateCustomer({ email: userEmail, name: currentUser.name || userEmail, userEmail, save: false }) : null;
+  const now = nowIso();
+  const result = db.prepare("INSERT INTO carts (cart_token, user_email, customer_id, status, currency, subtotal, discount_total, shipping_total, tax_total, total, metadata_json, created_at, updated_at, expires_at) VALUES (?, ?, ?, 'active', 'USD', 0, 0, 0, 0, 0, '{}', ?, ?, ?)")
+    .run(createPublicToken("cart"), userEmail || null, customer ? customer.id : null, now, now, new Date(Date.now() + 1000 * 60 * 60 * 24 * 45).toISOString());
+  cart = db.prepare("SELECT * FROM carts WHERE id = ?").get(result.lastInsertRowid);
+  setCartCookie(res, cart.cart_token);
+  saveDbSafe("cart-create");
+  return cart;
+}
+
+function addCartItem(cartId, item) {
+  const product = findProductForCartItem(item);
+  if (!product) throw new Error("Product not found");
+  const quantity = Math.max(1, Number(item.quantity || item.qty || 1));
+  if (quantity > Number(product.stock || 0)) throw new Error("Only " + product.stock + " units left for " + product.name);
+  const existing = db.prepare("SELECT * FROM cart_items WHERE cart_id = ? AND product_id = ? LIMIT 1").get(cartId, product.id);
+  const now = nowIso();
+  if (existing) {
+    const nextQty = Math.min(Number(product.stock || 0), Math.max(1, Number(existing.quantity || 0) + quantity));
+    db.prepare("UPDATE cart_items SET title = ?, unit_price = ?, quantity = ?, line_total = ?, updated_at = ? WHERE id = ?").run(product.name, product.price, nextQty, product.price * nextQty, now, existing.id);
+  } else {
+    db.prepare("INSERT INTO cart_items (cart_id, product_id, variant_id, sku, title, unit_price, quantity, line_total, properties_json, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, '{}', ?, ?)")
+      .run(cartId, product.id, product.slug, product.name, product.price, quantity, product.price * quantity, now, now);
+  }
+  recalculateCart(cartId);
+}
+
+function setCartItemQuantity(cartId, lineId, quantity) {
+  const row = db.prepare("SELECT ci.*, p.stock, p.name, p.price FROM cart_items ci LEFT JOIN products p ON p.id = ci.product_id WHERE ci.id = ? AND ci.cart_id = ?").get(Number(lineId), cartId);
+  if (!row) throw new Error("Cart line not found");
+  const qty = Math.max(0, Number(quantity || 0));
+  if (qty <= 0) db.prepare("DELETE FROM cart_items WHERE id = ? AND cart_id = ?").run(row.id, cartId);
+  else {
+    if (qty > Number(row.stock || 0)) throw new Error("Only " + row.stock + " units left for " + row.name);
+    db.prepare("UPDATE cart_items SET quantity = ?, unit_price = ?, line_total = ?, updated_at = ? WHERE id = ?").run(qty, row.price || row.unit_price, (row.price || row.unit_price) * qty, nowIso(), row.id);
+  }
+  recalculateCart(cartId);
+}
+
+function removeCartItem(cartId, lineId) {
+  db.prepare("DELETE FROM cart_items WHERE id = ? AND cart_id = ?").run(Number(lineId), cartId);
+  recalculateCart(cartId);
+}
+
+function markCartConverted(cartId) {
+  db.prepare("UPDATE carts SET status = 'converted', updated_at = ? WHERE id = ?").run(nowIso(), cartId);
+}
+
+function mergeGuestCartIntoServerCart(cartId, items = []) {
+  db.prepare("DELETE FROM cart_items WHERE cart_id = ?").run(cartId);
+  for (const item of items) addCartItem(cartId, item);
+  recalculateCart(cartId);
+}
+
 async function persistOrder(o, items, status, paymentMethod = "COD", paymentMeta = {}) {
   const orderCode = createOrderCode();
   const total = computeOrderTotal(items);
-  const createdAt = new Date().toISOString();
+  const createdAt = nowIso();
   const checkoutEmail = normalizeOrderEmail(o.email);
-  const accountEmail = normalizeOrderEmail(paymentMeta.accountEmail || o.accountEmail || "");
+  const accountEmail = normalizeOrderEmail(paymentMeta.accountEmail || o.accountEmail || checkoutEmail);
+  const customer = getOrCreateCustomer({ email: checkoutEmail || accountEmail, name: o.customerName, phone: o.phone, userEmail: accountEmail || checkoutEmail, save: false });
+  const addressPayload = { name: o.customerName, email: checkoutEmail, userEmail: accountEmail || checkoutEmail, phone: o.phone, address: o.address, city: o.city, state: o.state, pincode: o.pincode, country: o.country || "India" };
+  if (customer) saveCustomerAddress(customer.id, addressPayload, { save: false });
+  const shippingAddressJson = JSON.stringify(addressPayload);
   const itemsJson = JSON.stringify(items);
   const orderPayload = {
-    order_code: orderCode,
-    customer_name: o.customerName,
-    email: checkoutEmail,
-    phone: o.phone,
-    address: o.address,
-    city: o.city,
-    state: o.state,
-    pincode: o.pincode,
-    status,
-    total,
-    items_json: itemsJson,
-    created_at: createdAt,
-    payment_method: paymentMethod,
-    paypal_order_id: paymentMeta.paypalOrderId || null,
-    paypal_capture_id: paymentMeta.paypalCaptureId || null,
-    account_email: accountEmail || null
+    order_code: orderCode, customer_name: o.customerName, email: checkoutEmail, phone: o.phone, address: o.address, city: o.city, state: o.state, pincode: o.pincode,
+    status, total, items_json: itemsJson, created_at: createdAt, payment_method: paymentMethod, paypal_order_id: paymentMeta.paypalOrderId || null,
+    paypal_capture_id: paymentMeta.paypalCaptureId || null, account_email: accountEmail || null, customer_id: customer ? customer.id : null, cart_id: paymentMeta.cartId || o.cartId || null,
+    currency: "USD", subtotal: total, discount_total: 0, shipping_total: 0, tax_total: 0, grand_total: total, financial_status: deriveFinancialStatus(status),
+    fulfillment_status: "unfulfilled", billing_address_json: shippingAddressJson, shipping_address_json: shippingAddressJson, notes: "", tags_json: "[]", updated_at: createdAt
   };
-  db.prepare(`
-    INSERT INTO orders
-    (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at, payment_method, paypal_order_id, paypal_capture_id, account_email)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    orderPayload.order_code,
-    orderPayload.customer_name,
-    orderPayload.email,
-    orderPayload.phone,
-    orderPayload.address,
-    orderPayload.city,
-    orderPayload.state,
-    orderPayload.pincode,
-    orderPayload.status,
-    orderPayload.total,
-    orderPayload.items_json,
-    orderPayload.created_at,
-    orderPayload.payment_method,
-    orderPayload.paypal_order_id,
-    orderPayload.paypal_capture_id,
-    orderPayload.account_email
+  const result = db.prepare("INSERT INTO orders (order_code, customer_name, email, phone, address, city, state, pincode, status, total, items_json, created_at, payment_method, paypal_order_id, paypal_capture_id, account_email, customer_id, cart_id, currency, subtotal, discount_total, shipping_total, tax_total, grand_total, financial_status, fulfillment_status, billing_address_json, shipping_address_json, notes, tags_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+    orderPayload.order_code, orderPayload.customer_name, orderPayload.email, orderPayload.phone, orderPayload.address, orderPayload.city, orderPayload.state, orderPayload.pincode,
+    orderPayload.status, orderPayload.total, orderPayload.items_json, orderPayload.created_at, orderPayload.payment_method, orderPayload.paypal_order_id, orderPayload.paypal_capture_id,
+    orderPayload.account_email, orderPayload.customer_id, orderPayload.cart_id, orderPayload.currency, orderPayload.subtotal, orderPayload.discount_total, orderPayload.shipping_total,
+    orderPayload.tax_total, orderPayload.grand_total, orderPayload.financial_status, orderPayload.fulfillment_status, orderPayload.billing_address_json, orderPayload.shipping_address_json,
+    orderPayload.notes, orderPayload.tags_json, orderPayload.updated_at
   );
+  insertOrderItems(result.lastInsertRowid, orderCode, items, createdAt);
   const reduceStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
   for (const item of items) reduceStock.run(item.quantity, item.id);
+  if (orderPayload.cart_id) markCartConverted(orderPayload.cart_id);
+  if (customer) updateCustomerStats(customer.id, { save: false });
   try { saveDbStrict("orders"); } catch (error) { if (IS_PRODUCTION) throw new Error("Could not durably save order. Please try again."); }
   const order = db.prepare("SELECT * FROM orders WHERE order_code = ?").get(orderCode) || orderPayload;
   let mirrorResult = { mirrored: false, error: "Firestore mirror unavailable" };
@@ -1163,6 +1434,24 @@ async function persistOrder(o, items, status, paymentMethod = "COD", paymentMeta
   }
   try { await sendOrderNotifications(order, items); } catch (error) { console.warn("[order-email] notification failed:", error.message); }
   return { orderCode, total, order, items };
+}
+
+function backfillCommerceRows() {
+  try {
+    const orders = db.prepare("SELECT * FROM orders ORDER BY id").all();
+    for (const order of orders) {
+      insertOrderItems(order.id, order.order_code, parseItems(order.items_json), order.created_at || nowIso());
+      const customer = getOrCreateCustomer({ email: order.email, name: order.customer_name, phone: order.phone, userEmail: order.account_email || order.email, save: false });
+      if (customer) {
+        db.prepare("UPDATE orders SET customer_id = COALESCE(customer_id, ?), subtotal = COALESCE(NULLIF(subtotal, 0), ?), grand_total = COALESCE(grand_total, total), financial_status = COALESCE(NULLIF(financial_status, ''), ?), updated_at = COALESCE(updated_at, ?) WHERE id = ?")
+          .run(customer.id, Number(order.total || 0), deriveFinancialStatus(order.status), order.created_at || nowIso(), order.id);
+        updateCustomerStats(customer.id, { save: false });
+      }
+    }
+    saveDbSafe("commerce-backfill");
+  } catch (error) {
+    console.warn("[commerce-backfill] skipped:", error.message);
+  }
 }
 
 function currency(value) {
@@ -1824,6 +2113,11 @@ function readBody(req) {
     req.on("end", () => resolve(body));
     req.on("error", reject);
   });
+}
+
+async function readJsonBody(req) {
+  const raw = await readBody(req);
+  return raw ? JSON.parse(raw) : {};
 }
 
 function legacyHomePage(user = null) {
@@ -4552,6 +4846,8 @@ function mergeByKey(primary, secondary, keyFn) {
 
 async function getAdminData({ q = "" } = {}) {
   const localOrders = db.prepare("SELECT * FROM orders ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" }));
+  const localRealCustomers = (() => { try { return db.prepare("SELECT * FROM customers ORDER BY updated_at DESC, id DESC").all(); } catch { return []; } })();
+  const localCarts = (() => { try { return db.prepare("SELECT c.*, COUNT(ci.id) AS item_lines, COALESCE(SUM(ci.quantity), 0) AS item_count FROM carts c LEFT JOIN cart_items ci ON ci.cart_id = c.id GROUP BY c.id ORDER BY c.updated_at DESC LIMIT 500").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
   const localContacts = (() => { try { return db.prepare("SELECT * FROM contact_messages ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
   const localSupportTokens = (() => { try { return db.prepare("SELECT * FROM support_tokens ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
   const localNewsletterSubscribers = (() => { try { return db.prepare("SELECT * FROM newsletter_subscribers ORDER BY id DESC").all().map((row) => ({ ...row, _source: "SQLite" })); } catch { return []; } })();
@@ -4689,6 +4985,19 @@ async function getAdminData({ q = "" } = {}) {
     markCustomerSource(existing, "support", supportDate);
   }
 
+  for (const real of localRealCustomers) {
+    const existing = ensureCustomer(real.email || real.user_email, real.name || real.email);
+    if (!existing) continue;
+    existing.customer_id = real.id;
+    existing.customer_name = real.name || existing.customer_name;
+    existing.phone = real.phone || existing.phone;
+    existing.orders = Math.max(Number(existing.orders || 0), Number(real.orders_count || 0));
+    existing.total_spent = Math.max(Number(existing.total_spent || 0), Number(real.total_spent || 0));
+    existing.last_order_at = existing.last_order_at || real.last_order_at || "";
+    existing.notes = real.notes || "";
+    existing.tags = parseJsonSafe(real.tags_json, []);
+    markCustomerSource(existing, "customer-profile", real.updated_at || real.created_at || "");
+  }
   const customers = Array.from(customersMap.values()).sort((a, b) => new Date(b.last_seen_at || b.last_order_at || b.registered_at || 0) - new Date(a.last_seen_at || a.last_order_at || a.registered_at || 0));
   const customerByEmail = new Map(customers.map((c) => [normalizeOrderEmail(c.email), c]));
   const otpLogs = otpLogsRaw.map((row) => {
@@ -4705,7 +5014,7 @@ async function getAdminData({ q = "" } = {}) {
     contacts: contacts.filter((c) => [c.name, c.email, c.phone, c.subject, c.message].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25),
     customers: customers.filter((c) => [c.customer_name, c.email, c.phone, c.latest_address, c.order_refs.join(" "), (c.sources || []).join(" "), (c.checkout_emails || []).join(" "), (c.account_emails || []).join(" "), c.newsletter_subscribed_at, c.last_support_at].some((v) => String(v || "").toLowerCase().includes(search))).slice(0, 25)
   } : null;
-  return { orders, contacts, supportTokens, otpLogs, emailEvents, users: allUsersMerged, customers, searchResults };
+  return { orders, contacts, supportTokens, otpLogs, emailEvents, users: allUsersMerged, customers, carts: localCarts, searchResults };
 }
 
 function adminPage(user = null, opts = {}) {
@@ -4716,7 +5025,7 @@ function adminPage(user = null, opts = {}) {
   const adminNotice = adminMessage || adminError
     ? `<div class="cr-admin-alert ${adminError ? "is-error" : "is-success"}">${escapeHtml(adminError || adminMessage)}</div>`
     : "";
-  const adminData = opts.adminData || { orders: [], contacts: [], supportTokens: [], otpLogs: [], emailEvents: [], users: [], customers: [], searchResults: null };
+  const adminData = opts.adminData || { orders: [], contacts: [], supportTokens: [], otpLogs: [], emailEvents: [], users: [], customers: [], carts: [], searchResults: null };
   const mergedOrders = adminData.orders || [];
   const stats = {
     products: db.prepare("SELECT COUNT(*) AS count FROM products").get().count,
@@ -4906,6 +5215,18 @@ function adminPage(user = null, opts = {}) {
         <tbody>
           ${allCustomers.length ? allCustomers.map(renderCustomerRow).join("") : `<tr><td colspan="12">No customers yet.</td></tr>`}
         </tbody>
+      </table>
+      </div>
+    </section>
+  `;
+
+  const cartsSection = `
+    <section class="cr-admin-card" id="carts">
+      <div class="cr-admin-card-head"><h3>Persistent Carts (${(adminData.carts || []).length})</h3></div>
+      <div class="cr-admin-scroll is-tall">
+      <table class="cr-admin-table is-wide">
+        <thead><tr><th>Token</th><th>Customer</th><th>Status</th><th>Items</th><th>Total</th><th>Updated</th><th>Expires</th></tr></thead>
+        <tbody>${(adminData.carts || []).length ? (adminData.carts || []).map((cart) => '<tr><td><code>' + escapeHtml(String(cart.cart_token || '').slice(0, 24)) + '…</code></td><td>' + escapeHtml(cart.user_email || 'Guest') + '</td><td>' + escapeHtml(cart.status || '') + '</td><td>' + Number(cart.item_count || 0) + ' items · ' + Number(cart.item_lines || 0) + ' lines</td><td>' + currency(cart.total || 0) + '</td><td>' + formatAdminDate(cart.updated_at, false) + '</td><td>' + (cart.expires_at ? formatAdminDate(cart.expires_at, false) : '—') + '</td></tr>').join('') : '<tr><td colspan="7">No carts yet.</td></tr>'}</tbody>
       </table>
       </div>
     </section>
@@ -6048,6 +6369,7 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (!_commerceBackfilled) { backfillCommerceRows(); _commerceBackfilled = true; }
   const currentUser = await getCurrentUser(req);
   globalThis.__wwCtx = getRequestContext(req);
 
@@ -6580,6 +6902,103 @@ async function handleRequest(req, res) {
     return;
   }
 
+
+  if (req.method === "GET" && pathname === "/api/customer") {
+    if (!currentUser) { json(res, 401, { error: "Please log in" }); return; }
+    const customer = getOrCreateCustomer({ email: currentUser.email, name: currentUser.name, userEmail: currentUser.email });
+    json(res, 200, { ok: true, customer, addresses: customer ? listCustomerAddresses(customer.id) : [] });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/customer") {
+    if (!currentUser) { json(res, 401, { error: "Please log in" }); return; }
+    try {
+      const payload = await readJsonBody(req);
+      const customer = getOrCreateCustomer({ email: currentUser.email, name: payload.name || currentUser.name, phone: payload.phone || "", userEmail: currentUser.email, acceptsMarketing: payload.acceptsMarketing ? 1 : 0 });
+      json(res, 200, { ok: true, customer, addresses: customer ? listCustomerAddresses(customer.id) : [] });
+      return;
+    } catch (error) { json(res, 400, { error: error.message || "Could not update customer" }); return; }
+  }
+
+  if (req.method === "GET" && pathname === "/api/customer/addresses") {
+    if (!currentUser) { json(res, 401, { error: "Please log in" }); return; }
+    const customer = getOrCreateCustomer({ email: currentUser.email, name: currentUser.name, userEmail: currentUser.email });
+    json(res, 200, { ok: true, addresses: customer ? listCustomerAddresses(customer.id) : [] });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/customer/addresses") {
+    if (!currentUser) { json(res, 401, { error: "Please log in" }); return; }
+    try {
+      const payload = await readJsonBody(req);
+      const customer = getOrCreateCustomer({ email: currentUser.email, name: currentUser.name, phone: payload.phone || "", userEmail: currentUser.email });
+      const address = saveCustomerAddress(customer.id, { ...payload, email: currentUser.email, userEmail: currentUser.email, name: payload.name || currentUser.name });
+      json(res, 200, { ok: true, address, addresses: listCustomerAddresses(customer.id) });
+      return;
+    } catch (error) { json(res, 400, { error: error.message || "Could not save address" }); return; }
+  }
+
+  if (req.method === "POST" && pathname === "/api/customer/addresses/delete") {
+    if (!currentUser) { json(res, 401, { error: "Please log in" }); return; }
+    try {
+      const payload = await readJsonBody(req);
+      const customer = getCustomerByEmail(currentUser.email);
+      if (!customer) { json(res, 404, { error: "Customer not found" }); return; }
+      db.prepare("DELETE FROM customer_addresses WHERE id = ? AND customer_id = ?").run(Number(payload.id), customer.id);
+      saveDbSafe("customer-address-delete");
+      json(res, 200, { ok: true, addresses: listCustomerAddresses(customer.id) });
+      return;
+    } catch (error) { json(res, 400, { error: error.message || "Could not delete address" }); return; }
+  }
+
+  if (req.method === "GET" && pathname === "/api/cart") {
+    const cart = getOrCreateCart(req, res, currentUser);
+    json(res, 200, serializeCart(cart.id));
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/cart/items") {
+    try {
+      const payload = await readJsonBody(req);
+      const cart = getOrCreateCart(req, res, currentUser);
+      addCartItem(cart.id, payload);
+      saveDbSafe("cart-add");
+      json(res, 200, serializeCart(cart.id));
+      return;
+    } catch (error) { json(res, 400, { error: error.message || "Could not add cart item" }); return; }
+  }
+
+  if (req.method === "POST" && pathname === "/api/cart/items/update") {
+    try {
+      const payload = await readJsonBody(req);
+      const cart = getOrCreateCart(req, res, currentUser);
+      setCartItemQuantity(cart.id, payload.lineId || payload.id, payload.quantity);
+      saveDbSafe("cart-update");
+      json(res, 200, serializeCart(cart.id));
+      return;
+    } catch (error) { json(res, 400, { error: error.message || "Could not update cart item" }); return; }
+  }
+
+  if (req.method === "POST" && pathname === "/api/cart/items/remove") {
+    try {
+      const payload = await readJsonBody(req);
+      const cart = getOrCreateCart(req, res, currentUser);
+      removeCartItem(cart.id, payload.lineId || payload.id);
+      saveDbSafe("cart-remove");
+      json(res, 200, serializeCart(cart.id));
+      return;
+    } catch (error) { json(res, 400, { error: error.message || "Could not remove cart item" }); return; }
+  }
+
+  if (req.method === "POST" && pathname === "/api/cart/clear") {
+    const cart = getOrCreateCart(req, res, currentUser);
+    db.prepare("DELETE FROM cart_items WHERE cart_id = ?").run(cart.id);
+    recalculateCart(cart.id);
+    saveDbSafe("cart-clear");
+    json(res, 200, serializeCart(cart.id));
+    return;
+  }
+
   if (req.method === "GET" && pathname.startsWith("/api/orders/")) {
     const orderCode = pathname.split("/").pop();
     const order = await getOrderByCode(orderCode);
@@ -6768,33 +7187,13 @@ async function handleRequest(req, res) {
   }
 
   if (req.method === "POST" && pathname === "/api/cart/merge") {
-    if (!currentUser) {
-      json(res, 401, { error: "Not authenticated" });
-      return;
-    }
     try {
-      const raw = await readBody(req);
-      const payload = JSON.parse(raw || "{}");
+      const payload = await readJsonBody(req);
       const items = Array.isArray(payload.items) ? payload.items : [];
-      // No server-side cart table exists in this codebase — the cart is client-side (localStorage).
-      // We validate items, echo back a normalised merge list, and let the client write them to its store.
-      const merged = [];
-      for (const it of items) {
-        const slug = String(it.slug || "").trim();
-        const qty = Math.max(1, Number(it.qty || it.quantity || 1));
-        if (!slug) continue;
-        const product = db.prepare("SELECT id, slug, name, price, image FROM products WHERE slug = ?").get(slug);
-        if (!product) continue;
-        merged.push({
-          id: product.id,
-          slug: product.slug,
-          name: product.name,
-          price: product.price,
-          image: product.image,
-          quantity: qty
-        });
-      }
-      json(res, 200, { ok: true, items: merged });
+      const cart = getOrCreateCart(req, res, currentUser);
+      mergeGuestCartIntoServerCart(cart.id, items);
+      saveDbSafe("cart-merge");
+      json(res, 200, serializeCart(cart.id));
       return;
     } catch (error) {
       json(res, 400, { error: error.message || "Cart merge failed" });

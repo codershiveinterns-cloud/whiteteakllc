@@ -34,18 +34,63 @@
   }
 
   const CART_KEY = "wizardzwork-cart";
+  let CART_SYNCING = false;
+
+  function normalizeCartItems(items) {
+    return (items || []).map((item) => ({
+      id: Number(item.id || item.productId || item.product_id || 0),
+      lineId: item.lineId || item.line_id || "",
+      slug: item.slug || "",
+      name: item.name || item.title || "Item",
+      price: Number(item.price || item.unit_price || 0),
+      image: item.image || "",
+      quantity: Math.max(1, Number(item.quantity || item.qty || 1))
+    })).filter((item) => item.id);
+  }
 
   function readCart() {
     try {
-      return JSON.parse(localStorage.getItem(CART_KEY) || "[]");
+      return normalizeCartItems(JSON.parse(localStorage.getItem(CART_KEY) || "[]"));
     } catch {
       return [];
     }
   }
 
-  function writeCart(cart) {
-    localStorage.setItem(CART_KEY, JSON.stringify(cart));
+  function syncCartToServer(cart) {
+    if (CART_SYNCING) return;
+    CART_SYNCING = true;
+    fetch("/api/cart/merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: normalizeCartItems(cart).map((item) => ({ id: item.id, slug: item.slug, quantity: item.quantity })) })
+    }).then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (data && data.items) {
+          localStorage.setItem(CART_KEY, JSON.stringify(normalizeCartItems(data.items)));
+          updateCartCount();
+        }
+      })
+      .catch(() => { /* localStorage remains the fallback cart */ })
+      .finally(() => { CART_SYNCING = false; });
+  }
+
+  function hydrateCartFromServer() {
+    fetch("/api/cart")
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!data || !data.items || !data.items.length) return;
+        localStorage.setItem(CART_KEY, JSON.stringify(normalizeCartItems(data.items)));
+        updateCartCount();
+        renderCartPage();
+      })
+      .catch(() => { /* local cart remains available offline */ });
+  }
+
+  function writeCart(cart, options = {}) {
+    const normalized = normalizeCartItems(cart);
+    localStorage.setItem(CART_KEY, JSON.stringify(normalized));
     updateCartCount();
+    if (!options.localOnly) syncCartToServer(normalized);
   }
 
   function formatCurrency(value) {
@@ -609,6 +654,7 @@
   }
 
   updateCartCount();
+  hydrateCartFromServer();
   attachAddToCart();
   renderCartPage();
   renderCheckoutPage();
